@@ -36,12 +36,12 @@
 
 | Workflow | 触发 | 作用 |
 | --- | --- | --- |
-| `extract-appsecret` | 手动 | 全自动提取密钥 → 写 `env.json` → 同步仓库 Secret `LYNKCO_APP_SECRETS` → Bark 推送（值脱敏） |
+| `extract-appsecret` | 手动 | 全自动提取密钥 → 运行日志输出**一次性取件链接**（仅可打开 1 次、10 分钟失效），需手动填入 `LYNKCO_APP_SECRETS` 供 daily-tasks 使用 |
 | `fetch-lynkco-apk` | 每日 + 手动 | 拉取最新版领克 APK 上传 Release（`apk-v VERSION` 留历史 + `apk-latest` 稳定资产），提取 CI 优先使用 |
 
 ### 安全说明
 
-- 所有日志输出均脱敏（密钥值仅显示前 3 后 2 位），明文只写入本地 `env.json`（gitignore）与仓库 Secret
+- 所有日志输出均脱敏（密钥值仅显示前 3 后 2 位），明文只写入本地 `env.json`（gitignore）；CI 提取时通过一次性链接送达明文（仅可打开 1 次，10 分钟失效）
 - CI 使用的 x86_64 模拟器镜像与 APK 均托管在仓库 Release（`sysimg-x86_64-33-r09` / `apk-latest`），版本经实测钉死，不随上游变动漂移
 
 详细排障（镜像版本坑、IPv6 坑、forward 生命周期坑等）见 `docs/本地一键提取指南.md`。
@@ -125,7 +125,7 @@ python3 lynkco_daily_tasks.py    # 签到 + 分享 + 积分查询 + Bark 推送
      {"h5AppKey":"...","h5AppSecret":"...","nativeAppKey":"...","nativeAppSecret":"...","nativeAppCode":"...","loginAppCode":"...","deviceImei":"...","glDevId":"..."}
      ```
      （如果不想合并配置，也可仍改用 8 个独立的 `LYNKCO_H5_APP_KEY` 等 Secret，同时修改 workflow 中的 `env` 字段）。
-   - 可选：`LYNKCO_BARK_KEY`。
+   - 可选：`LYNKCO_BARK_KEY`（daily-tasks 的 Bark 推送）。
 3. 可在 `Actions` 页面手动触发一次 workflow 测试。
 4. 仅配置 `LYNKCO_TOKEN` 时，token 失效后需要手动更新；配置 `refreshToken` 后可自动续期，仅需在其过期（约 30 天）时才需人工干预。
 
