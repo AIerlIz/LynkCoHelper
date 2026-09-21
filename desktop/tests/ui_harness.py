@@ -3,6 +3,7 @@
 import json
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -19,6 +20,7 @@ class Store:
 
 
 class Cloud:
+    base_url = 'https://lynkco.ltools.asia'
     binding = None
     runs = []
 
@@ -49,11 +51,13 @@ class Cloud:
             if mode == 'activation-failure':
                 raise ValueError('云端暂时不可用，请稍后重试')
             self.binding = {'id': 'fixture-binding', 'label': body['label'], 'status': 'active', 'scheduleTime': body.get('scheduleTime', '08:00-10:00'),
-                            'doShare': body['doShare'], 'canShare': True, 'nextRunAt': time.time() * 1000 + 3600000}
+                            'doShare': body['doShare'], 'canShare': True, 'nextRunAt': time.time() * 1000 + 3600000,
+                            'inventory': {'cards': 12, 'days': 16}}
             return self.binding
         if path.startswith('/v1/binding/runs'):
             if method == 'POST':
-                self.runs = [{'id': 'fixture-run', 'businessDate': '2026-09-20', 'status': 'completed', 'startedAt': time.time()*1000,
+                today = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
+                self.runs = [{'id': 'fixture-run', 'businessDate': today, 'status': 'completed', 'startedAt': time.time()*1000,
                               'finishedAt': time.time()*1000, 'pointsBefore': '2680', 'pointsAfter': '2680', 'signStatus': 'already_signed',
                               'shareStatus': 'skipped', 'message': None, 'errorCode': None}]
                 return {'id': 'fixture-run', 'status': 'completed'}

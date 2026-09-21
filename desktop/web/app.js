@@ -47,6 +47,11 @@
   const text = (id, value) => {
     $(id).textContent = value == null ? "--" : String(value);
   };
+  const badge = (id, value, tone = "") => {
+    const node = $(id);
+    node.className = `badge ${tone}`.trim();
+    node.replaceChildren(Object.assign(document.createElement("i"), { ariaHidden: "true" }), document.createTextNode(value == null ? "--" : String(value)));
+  };
   const show = (id, visible) => {
     $(id).hidden = !visible;
   };
@@ -62,6 +67,26 @@
             : {}),
         }).format(new Date(value))
       : "--";
+  const shanghaiParts = (value = new Date()) =>
+    Object.fromEntries(
+      new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Asia/Shanghai",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      })
+        .formatToParts(value)
+        .filter((part) => part.type !== "literal")
+        .map((part) => [part.type, part.value]),
+    );
+  const businessDate = (value = new Date()) => {
+    const parts = shanghaiParts(value);
+    return `${parts.year}-${parts.month}-${parts.day}`;
+  };
+  const businessDateLabel = (value = new Date()) => {
+    const parts = shanghaiParts(value);
+    return `${parts.year} 年 ${parts.month} 月 ${parts.day} 日`;
+  };
   function notice(message, good = false) {
     text("notice", message);
     $("notice").classList.toggle("good", good);
@@ -143,7 +168,7 @@
     const table = document.createElement("table");
     table.className = "run-table";
     const head = table.createTHead().insertRow();
-    ["执行时间", "结果", "签到 / 分享", "奖励"].forEach((label) => {
+    ["执行时间", "任务", "结果", "签到 / 分享", "奖励"].forEach((label) => {
       const cell = document.createElement("th");
       cell.textContent = label;
       head.append(cell);
@@ -154,6 +179,7 @@
       row.insertCell().textContent = run.startedAt
         ? date(run.startedAt)
         : run.businessDate;
+      row.insertCell().textContent = "每日任务";
       const result = row.insertCell();
       const badge = document.createElement("span");
       badge.className = "badge";
@@ -181,6 +207,7 @@
       });
       row.insertCell().textContent = `${labels[run.signStatus] || run.signStatus || "--"} / ${labels[run.shareStatus] || run.shareStatus || "--"}`;
       const rewardCell = row.insertCell();
+      rewardCell.className = "reward-list";
       const rewards = run.rewards || {};
       const lines = [`积分：${run.pointsBefore ?? "暂无"} → ${run.pointsAfter ?? "暂无"}`];
       if (rewards.signEnergy != null) lines.push(`签到能量体：+${rewards.signEnergy}`);
@@ -190,7 +217,12 @@
         const change = rewards.cardsAfter - rewards.cardsBefore;
         lines.push(`签到卡：${rewards.cardsBefore} → ${rewards.cardsAfter}${change > 0 ? `（净增 ${change} 张）` : ""}`);
       } else lines.push("签到卡奖励：暂无数据");
-      lines.forEach((value) => { const line = document.createElement("div"); line.textContent = value; rewardCell.append(line); });
+      lines.forEach((value) => {
+        const line = document.createElement("span");
+        line.className = value.includes("能量") ? "reward energy" : value.includes("签到卡") ? "reward card" : value.includes("分享") ? "reward error" : "reward";
+        line.textContent = value;
+        rewardCell.append(line);
+      });
     });
     wrapper.append(table);
     container.append(wrapper);
@@ -231,6 +263,7 @@
   }
   function updatePushChoice() {
     const selected = document.querySelector('input[name="push-channel"]:checked')?.value || "none";
+    show("push-fields", selected !== "none");
     ["bark", "serverchan"].forEach(channel => {
       const active = selected === channel;
       $(`${channel}-key`).disabled = !active || !state?.binding;
@@ -256,8 +289,15 @@
         return option;
       });
       select.replaceChildren(placeholder, ...options);
-      select.value = options.some(option => option.value === previous && !option.disabled) ? previous : "";
+      const preferred = options.find(option => option.value === previous && !option.disabled)
+        || options.find(option => !option.disabled);
+      select.value = preferred?.value || "";
       text(`${prefix}-quota-hint`, items ? "暂停任务仍保留名额，保存时以云端剩余名额为准。" : "暂时无法读取剩余名额，请刷新云端状态后再保存。");
+      if (prefix === "settings") {
+        const selected = items?.find(item => item.value === select.value);
+        const available = selected && (selected.remaining > 0 || selected.current);
+        badge("quota-badge", available ? "名额充足" : items ? "名额已满" : "名额查询中", available ? "blue" : "warning");
+      }
     });
   }
   function render() {
@@ -309,23 +349,40 @@
       } else {
         avatar.textContent = (binding.label || "账").slice(0, 1);
       }
-      text("account-status", labels[binding.status] || binding.status);
-      $("account-status").className =
-        "badge " + (binding.status === "active" ? "" : "warning");
-      text(
-        "account-schedule",
-        `每日 ${hourLabel(binding.scheduleTime)} · ${binding.doShare ? "签到与分享" : "每日签到"}`,
-      );
+      badge("account-status", labels[binding.status] || binding.status, binding.status === "active" ? "success" : "warning");
+      text("account-window", `每日 ${hourLabel(binding.scheduleTime)}`);
+      text("account-streak", `连续签到 ${binding.inventory?.days ?? "--"} 天`);
       text(
         "next-run",
         binding.status === "active" ? date(binding.nextRunAt) : "--",
       );
       const latest = state.runs.items[0];
+      const latestIsToday = latest?.businessDate === businessDate();
+      const todayStatus = latestIsToday ? labels[latest.status] || latest.status : "待执行";
+      const statusTone = latestIsToday && ["completed", "success", "succeeded", "already_signed", "signed"].includes(latest.status)
+        ? "success"
+        : latestIsToday && ["failed", "error"].includes(latest.status)
+          ? "error"
+          : latestIsToday
+            ? "warning"
+            : "";
+      text("today-date", businessDateLabel());
+      badge("today-status", todayStatus, statusTone);
+      const pointsDelta = latest?.pointsBefore != null && latest?.pointsAfter != null
+        ? Number(latest.pointsAfter) - Number(latest.pointsBefore)
+        : null;
+      text("sign-task-detail", latestIsToday && latest.signStatus === "already_signed" ? "今日已完成，重复触发会自动跳过" : "每天执行一次");
+      text("sign-task-reward", pointsDelta == null ? "待执行" : `${pointsDelta >= 0 ? "+" : ""}${pointsDelta} 积分`);
+      text("share-task-detail", binding.doShare ? "签到时同时完成分享" : "当前未开启分享");
+      const shareEnergy = latest?.rewards?.signEnergy ?? latest?.shareEnergy;
+      text("share-task-reward", !binding.doShare ? "已关闭" : shareEnergy == null ? "待执行" : `+${shareEnergy} 能量体`);
+      text("next-run-label", binding.status === "active" && binding.nextRunAt ? `下一次执行：${date(binding.nextRunAt)}` : "下一次执行：已暂停");
       text("points", latest?.pointsAfter ?? latest?.pointsBefore ?? "--");
       const inventory = binding.inventory;
-      text("sign-cards", inventory?.cards != null ? `${inventory.cards} 张` : binding.inventoryError ? "查询失败" : "暂无");
+      text("sign-cards", inventory?.cards != null ? inventory.cards : binding.inventoryError ? "查询失败" : "暂无");
       text("energy", inventory?.energy != null ? `${inventory.energy}` : latest?.energyAfter != null ? `${latest.energyAfter}` : binding.inventoryError ? "查询失败" : "暂无");
       text("continue-days", inventory?.days != null ? `${inventory.days} 天` : binding.inventoryError ? "查询失败" : "暂无");
+      text("asset-updated", state.lastRefreshAt ? date(state.lastRefreshAt) : "暂无");
       text(
         "last-result",
         latest ? labels[latest.status] || latest.status : "暂无记录",
@@ -613,6 +670,7 @@
         scheduleTime: chosenWindow("bind"),
         doShare: $("bind-share").checked,
       });
+      view = "overview";
       notice("");
     });
   });
