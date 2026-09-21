@@ -25,6 +25,10 @@ MAX_EXTRACTED = 2 * 1024 * 1024 * 1024
 class ProgressUI:
     def __init__(self):
         self.root = self.label = self.detail = self.progress = None
+        # PyInstaller's windowed launcher has no standard output; source runs,
+        # CI, and SSH sessions keep terminal output and must never block on Tk.
+        if sys.stdout is not None and os.environ.get('LYNKCO_FORCE_PROGRESS_UI') != '1':
+            return
         try:
             import tkinter as tk
             from tkinter import ttk
