@@ -1,18 +1,23 @@
 name: Build desktop assistant
 on:
   push:
+    branches:
+      - main
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/build-desktop.yml'
     tags:
       - 'cloud-v*'
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release version, for example cloud-v0.1.0'
+        description: 'New release version, for example v0.1.9 or cloud-v0.1.9'
         required: true
         type: string
 permissions:
   contents: read
 concurrency:
-  group: desktop-release-${{ inputs.release_tag }}
+  group: desktop-build-${{ github.event_name }}-${{ github.ref }}-${{ inputs.release_tag }}
   cancel-in-progress: false
 jobs:
   prepare:
@@ -24,11 +29,30 @@ jobs:
       - id: version
         env:
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          [[ "$RELEASE_TAG" =~ ^cloud-v[0-9][A-Za-z0-9._-]*$ ]] || exit 1
-          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
-            echo 'Use a new release tag; existing versions must not be overwritten.'
+          if [[ "$EVENT_NAME" == push && "$REF_TYPE" == branch ]]; then
+            echo 'Branch push: test and build without publishing a release.'
+            echo 'tag=' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          case "$RELEASE_TAG" in
+            cloud-v*) ;;
+            v*) RELEASE_TAG="cloud-$RELEASE_TAG" ;;
+            [0-9]*) RELEASE_TAG="cloud-v$RELEASE_TAG" ;;
+          esac
+          if [[ ! "$RELEASE_TAG" =~ ^cloud-v[0-9][A-Za-z0-9._-]*$ ]]; then
+            echo '::error::Invalid version. Enter v0.1.9 or cloud-v0.1.9.'
+            exit 1
+          fi
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo '::error::This release already exists. Use a new version; published files must not be overwritten.'
+            exit 1
+          fi
+          if [[ "$EVENT_NAME" == workflow_dispatch ]] && gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            echo '::error::This tag already exists. Use a new version or run the workflow triggered by that tag.'
             exit 1
           fi
           echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
@@ -54,17 +78,20 @@ jobs:
       - run: python -m unittest discover -s desktop/tests -v
       - run: python desktop/packaging/build.py
       - run: python desktop/packaging/build_release.py --tag "$RELEASE_TAG" --platform "$PLATFORM"
+        if: needs.prepare.outputs.tag != ''
         shell: bash
         env:
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
           PLATFORM: ${{ matrix.platform }}
       - uses: actions/upload-artifact@v4
+        if: needs.prepare.outputs.tag != ''
         with:
           name: LynkCoHelper-cloud-${{ matrix.platform }}
           path: release/
           retention-days: 7
   release:
     needs: [prepare, build]
+    if: needs.prepare.outputs.tag != ''
     runs-on: ubuntu-latest
     permissions:
       contents: write
