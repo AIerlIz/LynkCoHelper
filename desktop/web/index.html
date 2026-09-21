@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>领克助手</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script defer src="/lucide.js"></script>
+    <script defer src="/app.js"></script>
+  </head>
+  <body>
+    <main>
+      <div id="notice" class="notice" role="status" hidden></div>
+      <h1 id="page-title" hidden>概览</h1>
+      <div class="utility-controls"><span id="cloud-status" class="status"><span class="dot"></span>正在连接</span><span id="last-sync" class="muted"></span><button id="refresh" class="icon-button" title="刷新云端状态" aria-label="刷新云端状态"><i data-lucide="refresh-cw"></i></button><button id="quit" class="icon-button" title="退出助手" aria-label="退出助手"><i data-lucide="power"></i></button></div>
+      <section id="identity-panel" hidden>
+        <div class="section-heading">
+          <i data-lucide="cloud"></i>
+          <div>
+            <h2>连接云端账号</h2>
+            <p class="muted">首次使用打开管理员发来的领取链接；更换电脑使用恢复码。</p>
+          </div>
+        </div>
+        <form id="identity-form" class="narrow form-stack">
+          <div class="segmented" role="group" aria-label="连接方式">
+            <button type="button" data-identity="claim" class="selected">
+              领取链接</button
+            ><button type="button" data-identity="recover">恢复账号</button>
+          </div>
+          <label
+            ><span id="identity-label">领取链接</span
+            ><input
+              id="identity-code"
+              required
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="粘贴管理员发来的领取链接"
+          /></label>
+          <p id="identity-help" class="muted">打开管理员发来的链接，复制地址栏中的完整链接粘贴到这里。</p>
+          <button class="primary" type="submit">
+            <i data-lucide="arrow-right"></i
+            ><span id="identity-submit">连接云端</span>
+          </button>
+        </form>
+      </section>
+      <section id="view-overview" class="view">
+        <div id="empty-account" class="empty-state">
+          <i data-lucide="smartphone"></i>
+          <h2>还没有绑定领克账号</h2>
+          <p>完成绑定后，每天的任务将在云端执行。</p>
+          <button class="primary" data-go-bind>
+            <i data-lucide="plus"></i>绑定我的账号
+          </button>
+        </div>
+        <div id="account-overview" hidden>
+          <div class="account-heading">
+            <div>
+              <h2 id="account-label"></h2>
+              <p id="account-schedule" class="muted"></p>
+            </div>
+            <div class="account-heading-actions"><span id="account-status" class="badge"></span><button id="binding-settings" type="button"><i data-lucide="settings-2"></i>绑定设置</button></div>
+          </div>
+          <div class="metrics">
+            <div><p>签到卡剩余</p><strong id="sign-cards">暂无</strong><span>以最近一次查询为准</span></div>
+            <div><p>连续签到</p><strong id="continue-days">暂无</strong><span>以领克返回天数为准</span></div>
+            <div>
+              <p>最近积分</p>
+              <strong id="points">--</strong><span>以最近一次运行结果为准</span>
+            </div>
+            <div>
+              <p>下次执行</p>
+              <strong id="next-run">--</strong><span>北京时间</span>
+            </div>
+            <div>
+              <p>最近运行</p>
+              <strong id="last-result">--</strong
+              ><span id="last-run-date">暂无记录</span>
+            </div>
+          </div>
+          <div class="action-row">
+            <button id="run-now" class="primary">
+              <i data-lucide="play"></i>立即签到一次</button
+            ><button id="pause">
+              <i data-lucide="pause"></i><span>暂停任务</span></button
+            >
+          </div>
+          <div class="section-heading spaced">
+            <h2>最近运行</h2>
+            <button class="text-button" data-go-history>
+              全部记录<i data-lucide="arrow-right"></i>
+            </button>
+          </div>
+          <div id="recent-runs"></div>
+          <section class="overview-settings" aria-labelledby="task-settings-title">
+            <h2 id="task-settings-title">每日任务</h2>
+            <form id="settings-form" class="narrow form-stack">
+              <label>每日执行区间（北京时间）<select id="settings-window" required></select></label>
+              <p id="settings-quota-hint" class="muted" role="status"></p>
+              <label class="check-label"><input id="settings-share" type="checkbox" />签到时同时完成分享</label>
+              <p id="settings-share-hint" class="muted"></p>
+              <h3>结果推送</h3>
+              <p class="muted">Bark 和 Server 酱只能选择一个推送渠道。</p>
+              <fieldset class="push-channel push-choice">
+                <legend>推送方式</legend>
+                <label class="check-label"><input id="push-none" name="push-channel" value="none" type="radio" checked />不推送</label>
+              </fieldset>
+              <fieldset class="push-channel">
+                <legend>Bark</legend>
+                <label class="check-label"><input id="bark-enabled" name="push-channel" value="bark" type="radio" />启用 Bark</label>
+                <label>Device Key<input id="bark-key" type="password" autocomplete="new-password" maxlength="256" placeholder="未配置" /></label>
+                <button id="bark-clear" type="button" title="清除 Bark 配置" aria-label="清除 Bark 配置"><i data-lucide="trash-2"></i></button>
+              </fieldset>
+              <fieldset class="push-channel">
+                <legend>Server 酱</legend>
+                <label class="check-label"><input id="serverchan-enabled" name="push-channel" value="serverchan" type="radio" />启用 Server 酱</label>
+                <label>SendKey<input id="serverchan-key" type="password" autocomplete="new-password" maxlength="256" placeholder="SCT 或 sctp 开头" /></label>
+                <button id="serverchan-clear" type="button" title="清除 Server 酱配置" aria-label="清除 Server 酱配置"><i data-lucide="trash-2"></i></button>
+              </fieldset>
+              <button type="submit" class="primary"><i data-lucide="save"></i>保存设置</button>
+            </form>
+          </section>
+        </div>
+        <div class="section-heading spaced">
+          <div><h3>恢复助手管理权限</h3><p class="muted">更换电脑或管理凭证失效时，使用恢复码重新连接。恢复码不是领克登录凭证。</p></div>
+          <button id="show-recover"><i data-lucide="key-round"></i>输入恢复码</button>
+        </div>
+      </section>
+      <section id="view-bind" class="view" hidden>
+        <ol class="steps" aria-label="绑定进度">
+          <li data-step="0"><span>1</span>配对</li>
+          <li data-step="1"><span>2</span>配置代理</li>
+          <li data-step="2"><span>3</span>抓包并验证</li>
+          <li data-step="3"><span>4</span>保存到云端</li>
+          <li data-step="4"><span>5</span>关闭代理并断开</li>
+        </ol>
+        <div id="bind-start">
+          <h2>连接你的手机</h2>
+          <p class="muted">
+            电脑和手机连接同一 Wi-Fi。首次连接需要安装本机证书。
+          </p>
+          <form id="capture-start" class="narrow form-stack">
+            <fieldset>
+              <legend>手机系统</legend>
+              <div class="segmented">
+                <button type="button" data-platform="IOS" class="selected">
+                  <i data-lucide="smartphone"></i>iPhone</button
+                ><button type="button" data-platform="ANDROID">
+                  <i data-lucide="smartphone"></i>安卓
+                </button>
+              </div>
+            </fieldset>
+            <label
+              >电脑网络<select id="network" required>
+                <option value="">正在读取网络...</option>
+              </select></label
+            >
+            <button type="submit" class="primary">
+              <i data-lucide="wifi"></i>开始连接
+            </button>
+          </form>
+        </div>
+        <div id="bind-connect" hidden>
+          <div id="pairing-step">
+          <div class="connection-layout">
+            <div>
+              <h2>用手机扫码配对</h2>
+              <p class="muted">手机与电脑连接同一 Wi-Fi，保持手机代理关闭。</p>
+              <p id="phone-paired" class="status"></p>
+            </div>
+            <figure class="qr">
+              <img id="pair-qr" alt="手机配对和证书下载二维码" width="176" height="176" />
+              <figcaption>使用手机相机扫码</figcaption>
+            </figure>
+          </div>
+          <div class="instructions">
+            <h3 id="phone-instructions-title">iPhone 证书设置</h3>
+            <p id="phone-instructions"></p>
+            <p>已安装并信任本机证书，无需重复安装。</p>
+          </div>
+          </div>
+          <div id="proxy-step" hidden>
+              <h2>配置手机代理</h2>
+              <p class="status">手机已配对</p>
+              <p>在当前 Wi-Fi 的代理设置中选择“手动”，鉴定保持关闭。</p>
+              <div class="network-values">
+                <div>
+                  <span>服务器</span><code id="proxy-address"></code
+                  ><button
+                    class="icon-button"
+                    data-copy="proxy-address"
+                    title="复制服务器"
+                    aria-label="复制服务器"
+                  >
+                    <i data-lucide="copy"></i>
+                  </button>
+                </div>
+                <div>
+                  <span>端口</span><code id="proxy-port"></code
+                  ><button
+                    class="icon-button"
+                    data-copy="proxy-port"
+                    title="复制端口"
+                    aria-label="复制端口"
+                  >
+                    <i data-lucide="copy"></i>
+                  </button>
+                </div>
+              </div>
+              <button id="proxy-next" class="primary"><i data-lucide="arrow-right"></i>已配置，开始抓包</button>
+          </div>
+          <div id="capture-step" hidden>
+          <h2>打开领克 App，抓包并验证</h2>
+          <p id="traffic-status" class="status"></p>
+          <div id="capture-wait" class="capture-status">
+            <span class="pulse"></span>
+            <div>
+              <h3>等待完整登录状态</h3>
+              <p>
+                等待领克 App 发起登录或续期请求。
+              </p>
+            </div>
+          </div>
+          <div id="capture-ready" hidden>
+            <div class="capture-status success">
+              <i data-lucide="circle-check"></i>
+              <div>
+                <h3>已获取完整登录状态</h3>
+                <p>下一步将登录状态加密保存到云端，用于每日签到和续期。</p>
+              </div>
+            </div>
+            <label class="check-label"
+              ><input
+                id="upload-consent"
+                type="checkbox"
+              />我同意将本次登录状态上传到云端</label
+            ><button id="prepare" class="primary">
+              <i data-lucide="shield-check"></i>验证账号
+            </button>
+          </div>
+          </div>
+        </div>
+        <section id="capture-details" class="capture-checks" aria-labelledby="capture-details-title">
+          <h3 id="capture-details-title">识别状态</h3>
+          <div class="capture-check"><span>登录态</span><strong id="capture-login-state"><i class="state-dot"></i>等待识别</strong></div>
+          <div class="capture-check"><span>个人信息</span><strong id="capture-profile-state"><i class="state-dot"></i>等待验证</strong></div>
+        </section>
+        <div id="bind-confirm" hidden>
+          <h2>保存到云端</h2>
+          <div class="preview">
+            <div>
+              <span>个人信息验证</span><strong id="preview-points">--</strong>
+            </div>
+            <div>
+              <span>保存位置</span><strong id="preview-sign">云端</strong>
+            </div>
+          </div>
+          <p id="candidate-expiry" class="muted"></p>
+          <form id="activate-form" class="narrow form-stack">
+            <label>每日执行区间（北京时间）<select id="bind-window" required></select></label>
+            <p id="bind-quota-hint" class="muted" role="status"></p>
+            <label class="check-label"
+              ><input id="bind-share" type="checkbox" />签到时同时完成分享</label
+            >
+            <p id="bind-share-hint" class="muted"></p>
+            <button type="submit" class="primary">
+              <i data-lucide="check"></i>确认保存
+            </button>
+          </form>
+        </div>
+        <div id="bind-cleanup" hidden>
+          <div id="save-complete" class="completion">
+            <i data-lucide="circle-check"></i>
+            <div>
+              <h2>绑定成功</h2>
+              <p>任务已交给云端，电脑关机后也会继续执行。</p>
+              <button id="cleanup-run-now" type="button" class="primary"><i data-lucide="play"></i>立即签到一次</button>
+            </div>
+          </div>
+          <h2>关闭代理并断开连接</h2>
+          <p id="unsaved-exit" class="muted" hidden>本次登录态尚未保存，断开后将清除。</p>
+          <p class="muted">
+            回到手机当前 Wi-Fi 的代理设置，选择“关闭 /
+            无”。
+          </p>
+        </div>
+        <button id="cancel-capture" hidden><i data-lucide="x"></i>放弃本次绑定</button>
+        <button id="continue-capture" hidden><i data-lucide="arrow-left"></i>返回继续抓包</button>
+        <div id="disconnect-panel" class="disconnect" hidden>
+          <label class="check-label"
+            ><input id="proxy-removed" type="checkbox" />我已关闭手机 Wi-Fi
+            代理</label
+          ><button id="stop-proxy">
+            <i data-lucide="unplug"></i>断开手机连接
+          </button>
+          <p class="muted">
+            关闭浏览器不会停止代理。退出助手前，请先完成此步骤。
+          </p>
+        </div>
+      </section>
+      <section id="view-history" class="view" hidden>
+        <div id="all-runs"></div>
+        <button id="more-runs" hidden>
+          <i data-lucide="chevron-down"></i>加载更早记录
+        </button>
+      </section>
+      <footer>
+        <span>领克助手 · 社区工具</span><span>任务时间采用北京时间</span>
+      </footer>
+    </main>
+    <dialog id="recovery-dialog">
+      <div class="dialog-heading">
+        <i data-lucide="key-round"></i>
+        <h2>保存你的恢复码</h2>
+      </div>
+      <p>更换电脑时需要它。恢复码相当于管理钥匙，请妥善保管。</p>
+      <code id="recovery-value" class="recovery-value"></code>
+      <p id="recovery-warning" class="notice" hidden>
+        系统凭据库保存失败。请先保存恢复码，允许钥匙串访问后，使用恢复码重新连接。
+      </p>
+      <div class="action-row">
+        <button id="download-recovery">
+          <i data-lucide="download"></i>下载恢复文件</button
+        ><button
+          id="copy-recovery"
+          class="icon-button"
+          title="复制恢复码"
+          aria-label="复制恢复码"
+        >
+          <i data-lucide="copy"></i>
+        </button>
+      </div>
+      <label class="check-label"
+        ><input id="recovery-saved" type="checkbox" />我已妥善保存恢复码</label
+      ><button id="close-recovery" class="primary">
+        继续<i data-lucide="arrow-right"></i>
+      </button>
+    </dialog>
+    <dialog id="confirm-dialog">
+      <h2 id="confirm-title"></h2>
+      <p id="confirm-message"></p>
+      <div class="action-row">
+        <button id="confirm-cancel">取消</button
+        ><button id="confirm-accept" class="danger">确认解除</button>
+      </div>
+    </dialog>
+    <dialog id="binding-settings-dialog">
+      <div class="dialog-heading"><i data-lucide="settings-2"></i><h2>绑定设置</h2></div>
+      <p>管理当前账号与手机登录态的连接。</p>
+      <div class="binding-settings-actions"><button id="binding-replace" class="primary"><i data-lucide="refresh-cw"></i>更换绑定</button><button id="binding-unbind" class="danger"><i data-lucide="unlink"></i>解除绑定</button></div>
+      <button id="binding-settings-cancel">关闭</button>
+    </dialog>
+  </body>
+</html>

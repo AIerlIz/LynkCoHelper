@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>领克助手 · 管理员</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script defer src="/lucide.js"></script>
+    <script defer src="/admin.js"></script>
+  </head>
+  <body class="admin-body">
+    <aside class="sidebar">
+      <a class="brand" href="/">
+        <span class="brand-mark">L<span>+</span></span>
+        <span>领克助手<small>ADMIN CONSOLE</small></span>
+      </a>
+      <div class="admin-sidebar-note">
+        <i data-lucide="shield-check"></i>
+        <p>管理员操作只在当前页面内存中保存密钥。关闭或刷新页面后需要重新输入。</p>
+      </div>
+      <div class="sidebar-bottom">
+        <span id="admin-status" class="status"><span class="dot"></span>未验证</span>
+        <a class="text-button admin-back" href="/">返回助手</a>
+      </div>
+    </aside>
+    <main>
+      <header class="page-header">
+        <div>
+          <p class="eyebrow">云端管理</p>
+          <h1>管理员看板</h1>
+        </div>
+        <div class="header-actions">
+          <span id="admin-last-sync" class="muted"></span>
+          <button id="admin-refresh" class="icon-button" title="刷新看板" aria-label="刷新看板" disabled>
+            <i data-lucide="refresh-cw"></i>
+          </button>
+        </div>
+      </header>
+      <div id="admin-notice" class="notice" role="status" hidden></div>
+
+      <section id="admin-login" class="admin-login-section">
+        <div class="section-heading">
+          <i data-lucide="lock-keyhole"></i>
+          <div>
+            <h2>验证管理员身份</h2>
+            <p class="muted">密钥不会写入 URL、浏览器存储或桌面应用配置。</p>
+          </div>
+        </div>
+        <form id="admin-login-form" class="admin-login-form">
+          <label>管理员密钥<input id="admin-key" type="password" autocomplete="off" required maxlength="512" /></label>
+          <button class="primary" type="submit"><i data-lucide="log-in"></i>进入看板</button>
+        </form>
+      </section>
+
+      <div id="admin-console" hidden>
+        <section class="admin-section">
+          <div class="section-heading spaced">
+            <div><h2>运行概览</h2><p class="muted">统计来自 D1 当前数据，点击右上角刷新。</p></div>
+          </div>
+          <div class="admin-metrics">
+            <div><p>用户</p><strong id="metric-users">--</strong><span id="metric-users-detail">绑定 -- · 活跃 --</span></div>
+            <div><p>可领取批次</p><strong id="metric-batches">--</strong><span id="metric-batches-detail">剩余 --</span></div>
+            <div><p>今日任务</p><strong id="metric-runs">--</strong><span id="metric-runs-detail">完成 -- · 失败 --</span></div>
+            <div><p>累计任务</p><strong id="metric-total-runs">--</strong><span>所有用户</span></div>
+          </div>
+        </section>
+
+        <section class="admin-section">
+          <div class="section-heading spaced">
+            <div><h2>生成领取批次</h2><p class="muted">链接只在本次页面会话中显示，请立即交给用户。</p></div>
+          </div>
+          <form id="batch-form" class="batch-form">
+            <label>名额数量<input id="batch-quantity" type="number" min="1" max="1000" value="10" required /></label>
+            <label>有效期（天）<input id="batch-days" type="number" min="1" max="30" value="7" required /></label>
+            <button class="primary" type="submit"><i data-lucide="link"></i>生成领取链接</button>
+          </form>
+          <div id="claim-result" class="claim-result" hidden>
+            <div>
+              <strong>领取链接已生成</strong>
+              <p class="muted">页面刷新或生成下一批次后不再显示此链接，请马上复制。</p>
+            </div>
+            <code id="claim-url"></code>
+            <button id="copy-claim-url" class="icon-button" type="button" title="复制领取链接" aria-label="复制领取链接"><i data-lucide="copy"></i></button>
+          </div>
+        </section>
+
+        <section class="admin-section">
+          <div class="section-heading spaced">
+            <div><h2>领取批次</h2><p class="muted">撤销只会阻止新的领取，已创建的用户不受影响。</p></div>
+          </div>
+          <div id="batch-table" class="admin-table-host"><div class="table-empty">暂无批次</div></div>
+        </section>
+
+        <section class="admin-section">
+          <div class="section-heading spaced">
+            <div><h2>账号运行状态</h2><p class="muted">只显示汇总状态，不展示登录凭证。</p></div>
+          </div>
+          <div id="user-table" class="admin-table-host"><div class="table-empty">暂无账号</div></div>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

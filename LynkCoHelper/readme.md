@@ -68,13 +68,10 @@ pip install -r requirements.txt
     "deviceId": ""
   },
   "secrets": {
-    "h5AppKey": "",
-    "h5AppSecret": "",
     "nativeAppKey": "",
     "nativeAppSecret": "",
     "nativeAppCode": "",
     "loginAppCode": "",
-    "deviceImei": "",
     "glDevId": ""
   },
   "notify": {
@@ -84,7 +81,7 @@ pip install -r requirements.txt
 ```
 
 - `user`：账号相关凭据（token 至少需要一个，见下）。
-- `secrets`：领克 App 的应用级签名密钥（非个人凭证，但代码中不内置，必须自行配置），获取方式见 `docs/AppSecret_逆向分析记录.md`。每个字段都支持用同名大写环境变量覆盖（如 `LYNKCO_H5_APP_KEY`）；也可用一个整合环境变量 `LYNKCO_APP_SECRETS`（值为与 `secrets` 结构相同的 JSON 字符串）一次性提供全部 8 个字段，适合 CI 只想配置一个 Secret 的场景（优先级：单独字段环境变量 > `LYNKCO_APP_SECRETS` > `env.json`）。均未配置时程序会直接报错退出。
+- `secrets`：领克 App 的应用级签名密钥（非个人凭证，但代码中不内置，必须自行配置），获取方式见 `docs/AppSecret_逆向分析记录.md`。每个字段都支持用同名大写环境变量覆盖（如 `LYNKCO_NATIVE_APP_KEY`）；也可用一个整合环境变量 `LYNKCO_APP_SECRETS`（值为与 `secrets` 结构相同的 JSON 字符串）一次性提供全部 5 个字段，适合 CI 只想配置一个 Secret 的场景（优先级：单独字段环境变量 > `LYNKCO_APP_SECRETS` > `env.json`）。均未配置时程序会直接报错退出。
 - `notify`：推送相关配置，`barkKey` 为 Bark 推送 Key（可选，也可用环境变量 `LYNKCO_BARK_KEY` 覆盖）。
 
 ### 3. 获取 token
@@ -120,11 +117,11 @@ python3 lynkco_daily_tasks.py    # 签到 + 分享 + 积分查询 + Bark 推送
 1. Fork 本仓库。
 2. 进入 `Settings → Secrets and variables → Actions`，新增 Secret：
    - 必需：`LYNKCO_TOKEN`（或 `LYNKCO_REFRESH_TOKEN` + `LYNKCO_DEVICE_ID`，推荐后者，可自动续期）。
-   - 必需：`LYNKCO_APP_SECRETS`，一个 JSON 字符串，整合了 `env.json` 中 `secrets` 段的全部 8 个字段，形如：
+   - 必需：`LYNKCO_APP_SECRETS`，一个 JSON 字符串，整合了 `env.json` 中 `secrets` 段的全部 5 个字段，形如：
      ```json
-     {"h5AppKey":"...","h5AppSecret":"...","nativeAppKey":"...","nativeAppSecret":"...","nativeAppCode":"...","loginAppCode":"...","deviceImei":"...","glDevId":"..."}
+     {"nativeAppKey":"...","nativeAppSecret":"...","nativeAppCode":"...","loginAppCode":"...","glDevId":"..."}
      ```
-     （如果不想合并配置，也可仍改用 8 个独立的 `LYNKCO_H5_APP_KEY` 等 Secret，同时修改 workflow 中的 `env` 字段）。
+     （如果不想合并配置，也可仍改用 5 个独立的 `LYNKCO_NATIVE_APP_KEY` 等 Secret，同时修改 workflow 中的 `env` 字段）。
    - 可选：`LYNKCO_BARK_KEY`（daily-tasks 的 Bark 推送）。
 3. 可在 `Actions` 页面手动触发一次 workflow 测试。
 4. 仅配置 `LYNKCO_TOKEN` 时，token 失效后需要手动更新；配置 `refreshToken` 后可自动续期，仅需在其过期（约 30 天）时才需人工干预。
@@ -132,7 +129,7 @@ python3 lynkco_daily_tasks.py    # 签到 + 分享 + 积分查询 + Bark 推送
 ## 已知限制
 
 - 登录环节（滑块验证码、可能的短信验证）无法完全自动化。
-- iOS 设备因 App 存在 SSL Pinning，无法直接抓包获取 token，建议使用 Android 模拟器/真机。
+- 已确认的 iPhone 使用场景可在安装并完全信任代理证书后抓包；桌面助手按此流程设计。不同 App/系统版本仍需真机验收，不能仅因系统是 iOS 就判定无法抓包。
 - `token`/`refreshToken`/`secrets` 均为敏感信息，请勿提交到公开仓库（`env.json` 已在 `.gitignore` 中忽略），应通过 GitHub Secrets 或本地 `env.json` 传递。
 
 ## 更多文档

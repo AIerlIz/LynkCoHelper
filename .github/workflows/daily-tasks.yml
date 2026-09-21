@@ -44,7 +44,7 @@ jobs:
         # App 共用签名密钥集合（JSON 字符串，详见 lynkco_common.py），必须配置，
         # 否则脚本会在计算签名时报错退出。字段名与 env.json 的 secrets 段一致：
         # {"nativeAppKey":"","nativeAppSecret":"","nativeAppCode":"",
-        #  "loginAppCode":"","deviceImei":"","glDevId":""}
+        #  "loginAppCode":"","glDevId":""}
         LYNKCO_APP_SECRETS: ${{ secrets.LYNKCO_APP_SECRETS }}
         # Bark 推送图标 URL（可选项，不配则 Bark 使用默认图标）
         LYNKCO_BARK_ICON: ${{ secrets.LYNKCO_BARK_ICON }}

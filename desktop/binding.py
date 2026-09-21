@@ -1,0 +1,248 @@
+"""Local binding state, with explicit upload and stale-result protection."""
+
+import copy
+import threading
+import time
+from urllib.parse import urlsplit
+
+from desktop.capture import clean_string
+
+
+class Controller:
+    def __init__(self, cloud, store):
+        self.cloud, self.store = cloud, store
+        self.lock = threading.RLock()
+        self.operation = threading.Lock()
+        self.identity = None
+        self.error = None
+        try:
+            self.identity = store.load()
+        except ValueError as error:
+            self.error = str(error)
+        self.session = None
+        self.generation = 0
+        self.stage = 'idle'
+        self.platform = None
+        self.candidate = None
+        self.binding = None
+        self.runs = {'items': [], 'nextCursor': None}
+        self.connected = False
+        self.configured = False
+        self.last_refresh = 0
+        self.proxy = None
+        self.capture_events = []
+        self.schedule_windows = None
+        self.schedule_windows_error = None
+
+    def _refresh_schedule_windows(self):
+        try:
+            result = self._request('GET', '/v1/schedule-windows') if self.identity else None
+            if self.identity and (not isinstance(result, dict) or not isinstance(result.get('items'), list)):
+                raise ValueError('暂时无法查询区间名额，请刷新后重试')
+            with self.lock:
+                self.schedule_windows, self.schedule_windows_error = result, None
+        except ValueError:
+            with self.lock:
+                self.schedule_windows = None
+                self.schedule_windows_error = '暂时无法查询区间名额，请刷新后重试'
+
+    def record_capture(self, summary):
+        from desktop.capture import AUTH_HOSTS, AUTH_PATHS, display_path
+        if not isinstance(summary, dict):
+            return
+        host = clean_string(summary.get('host'), 253)
+        if not host or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-:' for c in host):
+            return
+        outcomes = ('captured', 'http_error', 'invalid_json', 'business_error', 'incomplete', 'pending', 'completed', 'network_error', 'tunnel')
+        if summary.get('outcome') not in outcomes or (summary.get('status') is not None and type(summary.get('status')) is not int):
+            return
+        fields = summary.get('fields')
+        if not isinstance(fields, dict):
+            return
+        event = {k: summary[k] for k in ('host', 'path', 'outcome', 'status')}
+        is_auth = host in AUTH_HOSTS and event['path'] in AUTH_PATHS
+        if not is_auth:
+            path = clean_string(event['path'], 2048)
+            event['path'] = display_path(path) if path and path.startswith('/') else '/[redacted]'
+        event['fields'] = {k: fields.get(k) is True for k in ('token', 'refreshToken', 'deviceId', 'platform')} if is_auth else {}
+        method = summary.get('method')
+        event['method'] = method if method in ('GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS', 'CONNECT') else 'OTHER'
+        event_id = clean_string(summary.get('id'), 64)
+        event['id'] = event_id if event_id and all(c in '0123456789abcdef-' for c in event_id) else None
+        event['at'] = int(time.time() * 1000)
+        with self.lock:
+            if event['id']:
+                self.capture_events = [e for e in self.capture_events if e.get('id') != event['id']]
+            self.capture_events = (self.capture_events + [event])[-200:]
+
+    def _request(self, method, path, body=None):
+        if not self.identity:
+            raise ValueError('请先输入领取链接或恢复码')
+        return self.cloud.request(method, path, body, self.identity['managementToken'])
+
+    def register(self, code, recover=False):
+        with self.operation:
+            code = clean_string(code, 512)
+            if not code:
+                raise ValueError('请输入有效的邀请码或恢复码')
+            if self.identity and not recover:
+                raise ValueError('当前设备已经连接云端')
+            if not recover:
+                raise ValueError('请使用领取链接连接云端')
+            identity = self.cloud.request('POST', '/v1/users/recover', {'recoveryCode': code})
+            return self._adopt_identity(identity)
+
+    def claim(self, claim_url):
+        """Redeem a self-service claim link without persisting the link itself."""
+        with self.operation:
+            value = clean_string(claim_url, 2048)
+            if not value:
+                raise ValueError('请输入有效的领取链接')
+            parsed = urlsplit(value)
+            base = urlsplit(self.cloud.base_url)
+            if parsed.scheme != base.scheme or parsed.hostname != base.hostname or parsed.port != base.port:
+                raise ValueError('领取链接不是本助手的云端链接')
+            parts = parsed.path.rstrip('/').split('/')
+            if len(parts) != 3 or parts[1] != 'claim' or not clean_string(parts[2], 128) or not all(c.isalnum() or c in '-_' for c in parts[2]):
+                raise ValueError('领取链接格式无效')
+            if self.identity:
+                raise ValueError('当前设备已经连接云端')
+            identity = self.cloud.request('POST', '/v1/claim/' + parts[2], {})
+            return self._adopt_identity(identity)
+
+    def _adopt_identity(self, identity):
+        recovery = identity['recoveryCode']
+        saved = {key: identity[key] for key in ('userId', 'managementToken')}
+        # Preserve the recovery code in the explicit response even if the OS vault denies access.
+        try:
+            self.store.save(saved)
+        except ValueError:
+            return {'recoveryCode': recovery, 'saved': False}
+        with self.lock:
+            self.identity = saved
+            self.session = self.candidate = self.binding = None
+            self.runs = {'items': [], 'nextCursor': None}
+            self.generation += 1
+            self.stage = 'idle'
+            self.error = None
+        self._refresh_schedule_windows()
+        return {'recoveryCode': recovery, 'saved': True}
+
+    def receive_capture(self, session):
+        if not isinstance(session, dict) or session.get('platform') not in ('IOS', 'ANDROID'):
+            return False
+        if not all(clean_string(session.get(key), 256 if key == 'deviceId' else 4096) for key in ('token', 'refreshToken', 'deviceId')):
+            return False
+        allowed = ('token', 'refreshToken', 'deviceId', 'platform', 'appVersion', 'appBuild', 'glDevId', 'deviceImei')
+        with self.lock:
+            if self.stage == 'cleanup':
+                return False
+            self.session = {k: session[k] for k in allowed if k in session and clean_string(session[k])}
+            self.platform = session['platform']
+            self.generation += 1
+            self.candidate = None
+            self.stage = 'captured'
+        return True
+
+    def prepare(self):
+        with self.operation:
+            with self.lock:
+                if not self.session:
+                    raise ValueError('尚未获取完整登录状态，请在手机上打开领克 App')
+                session, version = dict(self.session), self.generation
+            candidate = self._request('POST', '/v1/binding-candidates', {'session': session})
+            with self.lock:
+                if version != self.generation:
+                    raise ValueError('手机登录状态已更新，请重新验证')
+                self.candidate = candidate
+                self.stage = 'verified'
+            return candidate
+
+    def activate(self, settings):
+        with self.operation:
+            with self.lock:
+                candidate = self.candidate
+                if not candidate or candidate['expiresAt'] <= time.time() * 1000:
+                    self.candidate = None
+                    self.stage = 'captured' if self.session else 'waiting'
+                    raise ValueError('验证结果已过期，请重新获取登录状态')
+                version = self.generation
+                # Freeze capture during activation so a second phone flow cannot replace the preview.
+                self.stage = 'cleanup'
+            try:
+                binding = self._request('POST', '/v1/binding-candidates/' + candidate['id'] + '/activate', settings)
+            except Exception as error:
+                with self.lock:
+                    if version == self.generation:
+                        self.stage = 'verified'
+                if getattr(error, 'code', None) == 'SLOT_FULL':
+                    self._refresh_schedule_windows()
+                raise
+            with self.lock:
+                self.binding = binding
+                self.session = self.candidate = None
+                self.generation += 1
+            if self.proxy:
+                self.proxy.disable_capture()
+            self._refresh_schedule_windows()
+            return binding
+
+    def refresh(self):
+        with self.operation:
+            try:
+                health = self.cloud.request('GET', '/health')
+                binding = self._request('GET', '/v1/binding') if self.identity else None
+                runs = self._request('GET', '/v1/binding/runs') if binding else {'items': [], 'nextCursor': None}
+                self._refresh_schedule_windows()
+                with self.lock:
+                    self.connected, self.configured = True, health.get('configured', False)
+                    self.binding, self.runs, self.error = binding, runs, None
+                    self.last_refresh = time.time()
+            except ValueError as error:
+                with self.lock:
+                    self.connected, self.error = False, str(error)
+                raise
+        return self.public_state()
+
+    def settings(self, body):
+        with self.operation:
+            try:
+                binding = self._request('PATCH', '/v1/binding', body)
+            except ValueError as error:
+                if getattr(error, 'code', None) == 'SLOT_FULL':
+                    self._refresh_schedule_windows()
+                raise
+            with self.lock:
+                self.binding = binding
+            self._refresh_schedule_windows()
+            return binding
+
+    def run(self):
+        with self.operation:
+            return self._request('POST', '/v1/binding/runs', {})
+
+    def delete(self):
+        with self.operation:
+            result = self._request('DELETE', '/v1/binding')
+            with self.lock:
+                self.binding = self.session = self.candidate = None
+                self.runs = {'items': [], 'nextCursor': None}
+                self.generation += 1
+            self._refresh_schedule_windows()
+            return result
+
+    def history(self, cursor):
+        from urllib.parse import urlencode
+        with self.operation:
+            return self._request('GET', '/v1/binding/runs?' + urlencode({'cursor': cursor}))
+
+    def public_state(self):
+        with self.lock:
+            return copy.deepcopy({
+                'hasIdentity': bool(self.identity), 'connected': self.connected, 'configured': self.configured,
+                'error': self.error, 'lastRefreshAt': int(self.last_refresh * 1000),
+                'binding': self.binding, 'runs': self.runs, 'candidate': self.candidate,
+                'scheduleWindows': self.schedule_windows, 'scheduleWindowsError': self.schedule_windows_error,
+                'capture': {'stage': self.stage, 'platform': self.platform, 'events': self.capture_events},
+                'proxy': self.proxy.public_state() if self.proxy else {'running': False},
+            })

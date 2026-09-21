@@ -4,6 +4,10 @@
 
 领克 App 自动签到助手，支持每日签到、分享任务、积分查询与 Bark 推送，可通过 GitHub Actions 定时自动运行。
 
+## 桌面 + 云端助手（试用版）
+
+新增双击启动的本地浏览器界面，支持手机证书配对、完整登录态识别、确认绑定、云端每日任务和运行记录，日常任务不依赖 GitHub Actions。使用说明与验收限制见 [desktop/README.md](desktop/README.md)。云端 Worker、管理后台和迁移脚本独立维护在私有仓库 `shovelshit/LynkCoHelper-Cloud`。
+
 ## 功能状态
 
 ### 已完成

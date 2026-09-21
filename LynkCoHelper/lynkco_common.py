@@ -9,7 +9,7 @@ env.json 结构（三个子对象）：
       "user": {"username": "", "password": "", "token": "", "refreshToken": "", "deviceId": "",
                 "tokenExpireAt": ""},
       "secrets": {"nativeAppKey": "", "nativeAppSecret": "", "nativeAppCode": "",
-                  "loginAppCode": "", "deviceImei": "", "glDevId": ""},
+                  "loginAppCode": "", "glDevId": ""},
       "notify": {"barkKey": ""}
     }
 
@@ -41,7 +41,6 @@ _SECRET_SPECS = {
     "NATIVE_APP_SECRET": ("LYNKCO_NATIVE_APP_SECRET", "nativeAppSecret"),
     "NATIVE_APP_CODE": ("LYNKCO_NATIVE_APP_CODE", "nativeAppCode"),
     "LOGIN_APP_CODE": ("LYNKCO_LOGIN_APP_CODE", "loginAppCode"),
-    "NATIVE_RISK_IMEI": ("LYNKCO_DEVICE_IMEI", "deviceImei"),
     "NATIVE_GL_DEV_ID": ("LYNKCO_NATIVE_GL_DEV_ID", "glDevId"),
 }
 
@@ -110,7 +109,6 @@ _LAZY_ATTRS = {
     "NATIVE_APP_SECRET": lambda: _get_secret("NATIVE_APP_SECRET"),
     "NATIVE_APP_CODE": lambda: _get_secret("NATIVE_APP_CODE"),
     "LOGIN_APP_CODE": lambda: _get_secret("LOGIN_APP_CODE"),
-    "NATIVE_RISK_IMEI": lambda: _get_secret("NATIVE_RISK_IMEI"),
     "NATIVE_DEVICE_HEADERS": _build_native_device_headers,
 }
 

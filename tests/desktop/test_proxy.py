@@ -1,0 +1,72 @@
+import json
+import tempfile
+import unittest
+import socket
+from types import SimpleNamespace
+from pathlib import Path
+from unittest.mock import patch
+from urllib.error import HTTPError
+from urllib.request import urlopen
+
+from desktop.proxy import ProxyManager, network_addresses
+
+
+class ProxyLifecycleTests(unittest.TestCase):
+    def test_fixed_ports_do_not_fall_back_when_occupied(self):
+        with tempfile.TemporaryDirectory() as directory, socket.socket() as occupied:
+            occupied.bind(('127.0.0.1', 0))
+            port = occupied.getsockname()[1]
+            (Path(directory) / 'ports.json').write_text(json.dumps({'proxy': port, 'certificate': port + 1}))
+            manager = ProxyManager(directory, 'http://127.0.0.1:1/internal/capture', 'fixture')
+            with patch('desktop.proxy.network_addresses', return_value=[{'address': '127.0.0.1'}]):
+                with self.assertRaisesRegex(ValueError, '端口'):
+                    manager.start('127.0.0.1', 'IOS')
+
+    def test_active_wifi_can_use_non_rfc1918_address(self):
+        entry = lambda address: SimpleNamespace(family=socket.AF_INET, address=address)
+        interfaces = {'en0':[entry('11.39.142.1')], 'en1':[entry('100.64.1.2')],
+                      'utun8':[entry('11.39.142.1')], 'lo0':[entry('127.0.0.1')],
+                      'en2':[entry('192.168.1.2')]}
+        stats = {name:SimpleNamespace(isup=name != 'en2') for name in interfaces}
+        with patch('psutil.net_if_addrs',return_value=interfaces), patch('psutil.net_if_stats',return_value=stats):
+            self.assertEqual(network_addresses(), [{'name':'en0','address':'11.39.142.1'}, {'name':'en1','address':'100.64.1.2'}])
+
+    def test_real_proxy_certificate_pairing_passthrough_and_stop(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manager = ProxyManager(directory, 'http://127.0.0.1:1/internal/capture', 'fixture-callback')
+            try:
+                with patch('desktop.proxy.network_addresses', return_value=[{'name':'fixture','address':'127.0.0.1'}]):
+                    state = manager.start('127.0.0.1', 'IOS')
+                process = manager.process
+                self.assertTrue(state['running'])
+                self.assertFalse(manager.accepts_peer('127.0.0.1'))
+                with urlopen(state['pairUrl'], timeout=3) as response:
+                    self.assertEqual(response.status, 200)
+                self.assertTrue(manager.accepts_peer('127.0.0.1'))
+                with urlopen(state['pairUrl'] + '/certificate.cer', timeout=3) as response:
+                    certificate = response.read()
+                    self.assertIn(b'BEGIN CERTIFICATE', certificate)
+                    self.assertNotIn(b'PRIVATE KEY', certificate)
+                for path in ['/mitmproxy-ca.pem', '/../ca/mitmproxy-ca.pem', '/env.json']:
+                    from urllib.parse import urlsplit
+                    parsed = urlsplit(state['pairUrl'])
+                    with self.assertRaises(HTTPError) as caught:
+                        urlopen(f'{parsed.scheme}://{parsed.netloc}' + path, timeout=3)
+                    self.assertEqual(caught.exception.code, 404)
+                manager.disable_capture()
+                self.assertTrue(manager.public_state()['running'])
+                self.assertFalse(manager.accepts_peer('127.0.0.1'))
+                self.assertFalse(json.loads((Path(directory)/'proxy-state.json').read_text())['captureEnabled'])
+                manager.stop()
+                self.assertIsNotNone(process.poll())
+                self.assertFalse(manager.public_state()['running'])
+                with patch('desktop.proxy.network_addresses', return_value=[{'name':'fixture','address':'127.0.0.1'}]):
+                    restarted = manager.start('127.0.0.1', 'IOS')
+                self.assertEqual(restarted['port'], state['port'])
+                self.assertEqual(urlsplit(restarted['pairUrl']).port, urlsplit(state['pairUrl']).port)
+            finally:
+                manager.stop()
+
+
+if __name__ == '__main__':
+    unittest.main()

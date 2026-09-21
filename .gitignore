@@ -127,3 +127,10 @@ dmypy.json
 work/
 
 .codebuddy/
+
+# Isolated development and local runtimes
+.worktrees/
+.superpowers/
+node_modules/
+.wrangler/
+.dev.vars*

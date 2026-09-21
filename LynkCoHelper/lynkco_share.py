@@ -209,7 +209,7 @@ class LynkCoShareClient:
                 # channel 为 URL-encoded 后的值（"%E5%90%89%E5%88%A9" = 吉利），
                 # HTTP 头只能是 ASCII 字符，直接放中文会被 requests 库报编码错。
                 "channel": "%E5%90%89%E5%88%A9", "screenResolution": "2400*1080", "brand": "google",
-                "model": "sdk_gphone64_arm64", "imsi": lynkco_common.NATIVE_RISK_IMEI,
+                "model": "sdk_gphone64_arm64",
                 "geelyDeviceId": "0de2480e07cefcd852cf3a8dadc822cc", "os": "android",
                 "osVersion": "13", "androidVersion": "33", "networkType": "WIFI",
                 "ip": "10.0.2.16", "wifiName": "AndroidWifi", "wifiSignalLevel": "-50",
@@ -223,7 +223,6 @@ class LynkCoShareClient:
             "risk_type": "1",
             "risk_request_info": risk_request_info,
             "sweet_security_info": sweet_security_info,
-            "imei": lynkco_common.NATIVE_RISK_IMEI,
             "os": "13",
         }
         if account_id:
