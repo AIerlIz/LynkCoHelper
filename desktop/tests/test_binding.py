@@ -23,6 +23,10 @@ class FakeCloud:
         self.calls.append((method, path, body))
         if path.startswith('/v1/claim/'):
             return dict(userId='owner', managementToken='management-secret', recoveryCode='recovery-secret')
+        if path == '/v1/users/recover':
+            if body and body.get('recoveryToken') == 'admin-reset-token':
+                return dict(userId='owner', managementToken='new-management', recoveryCode='new-recovery')
+            return dict(userId='owner', managementToken='management-secret', recoveryCode='recovery-secret')
         if path == '/v1/binding-candidates':
             if self.on_prepare:
                 self.on_prepare()
@@ -59,6 +63,12 @@ class BindingTests(unittest.TestCase):
         controller = __import__('desktop.binding', fromlist=['Controller']).Controller(self.cloud, MemoryStore())
         with self.assertRaisesRegex(ValueError, '不是本助手的云端链接'):
             controller.claim('https://example.com/claim/claim-token_123456')
+
+    def test_recover_accepts_admin_reset_link_from_the_fixed_cloud_host(self):
+        controller = __import__('desktop.binding', fromlist=['Controller']).Controller(self.cloud, MemoryStore())
+        result = controller.register('https://lynkco.ltools.asia/recover#token=admin-reset-token', recover=True)
+        self.assertTrue(result['saved'])
+        self.assertIn(('POST', '/v1/users/recover', {'recoveryToken': 'admin-reset-token'}), self.cloud.calls)
 
     def test_capture_remains_local_until_explicit_prepare(self):
         before = len(self.cloud.calls)

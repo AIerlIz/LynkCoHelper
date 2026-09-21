@@ -119,6 +119,11 @@
       state = await api("/api/status");
       render();
     } catch (error) {
+      if (/管理凭证已失效|恢复码/.test(error.message || "")) {
+        forceRecover = true;
+        identityType("recover");
+        view = "overview";
+      }
       try {
         state = await api("/api/status");
         render();
@@ -536,11 +541,11 @@
       .forEach((item) =>
         item.classList.toggle("selected", item.dataset.identity === mode),
       );
-    text("identity-label", mode === "claim" ? "领取链接" : "恢复码");
+    text("identity-label", mode === "claim" ? "领取链接" : "恢复码或管理员恢复链接");
     $("identity-code").placeholder =
-      mode === "claim" ? "粘贴管理员发来的领取链接" : "输入已保存的恢复码";
+      mode === "claim" ? "粘贴管理员发来的领取链接" : "输入恢复码，或粘贴管理员恢复链接";
     text("identity-submit", mode === "claim" ? "领取并连接" : "恢复账号");
-    text("identity-help", mode === "claim" ? "链接只用于本次领取，不会保存到电脑。" : "恢复码用于换电脑或管理凭证失效时恢复助手权限。");
+    text("identity-help", mode === "claim" ? "链接只用于本次领取，不会保存到电脑。" : "恢复码永久有效但使用后会轮换；管理员恢复链接 30 分钟内有效且只能兑换一次。");
   }
   document
     .querySelectorAll("[data-identity]")

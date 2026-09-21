@@ -89,7 +89,19 @@ class Controller:
                 raise ValueError('当前设备已经连接云端')
             if not recover:
                 raise ValueError('请使用领取链接连接云端')
-            identity = self.cloud.request('POST', '/v1/users/recover', {'recoveryCode': code})
+            payload = {'recoveryCode': code}
+            parsed = urlsplit(code)
+            if parsed.scheme or parsed.netloc or parsed.fragment:
+                base = urlsplit(self.cloud.base_url)
+                if parsed.scheme != base.scheme or parsed.hostname != base.hostname or parsed.port != base.port or parsed.path.rstrip('/') != '/recover':
+                    raise ValueError('恢复链接不是本助手的云端链接')
+                if not parsed.fragment.startswith('token='):
+                    raise ValueError('恢复链接格式无效')
+                token = parsed.fragment[6:]
+                if not token or len(token) > 128 or not all(char.isalnum() or char in '-_' for char in token):
+                    raise ValueError('恢复链接格式无效')
+                payload = {'recoveryToken': token}
+            identity = self.cloud.request('POST', '/v1/users/recover', payload)
             return self._adopt_identity(identity)
 
     def claim(self, claim_url):

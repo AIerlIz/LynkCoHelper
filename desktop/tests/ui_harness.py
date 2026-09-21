@@ -27,7 +27,7 @@ class Cloud:
     def request(self, method, path, body=None, token=None):
         if path == '/health':
             return {'service': 'lynkco-helper', 'configured': True}
-        if path in ('/v1/owners', '/v1/owners/recover'):
+        if path in ('/v1/owners', '/v1/owners/recover', '/v1/users/recover'):
             return {'userId': 'fixture-owner', 'managementToken': 'fixture-management', 'recoveryCode': 'fixture-recovery-code-save-me'}
         if path.startswith('/v1/claim/'):
             return {'userId': 'fixture-owner', 'managementToken': 'fixture-management', 'recoveryCode': 'fixture-recovery-code-save-me'}
