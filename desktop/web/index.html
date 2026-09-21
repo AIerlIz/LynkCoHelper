@@ -63,7 +63,16 @@
             <div class="account-strip-actions"><span id="account-status" class="badge"></span><button id="binding-settings" type="button"><i data-lucide="settings-2"></i>绑定设置</button></div>
           </div>
           <div class="metrics">
-            <div class="asset-metric"><p><i data-lucide="wallet-cards"></i>当前资产</p><div class="asset-values"><span><strong id="points">--</strong><small>积分</small></span><b></b><span><strong id="sign-cards">暂无</strong><small>签到卡</small></span><b></b><span><strong id="energy">暂无</strong><small>能量体</small></span></div><span>最近查询 <b id="asset-updated">--</b></span></div>
+            <div class="asset-metric">
+              <p><i data-lucide="wallet-cards"></i>当前资产</p>
+              <div class="asset-values"><span><strong id="points">--</strong><small>积分</small></span><b></b><span><strong id="sign-cards">暂无</strong><small>签到卡</small></span><b></b><span><strong id="energy">暂无</strong><small>能量体</small></span></div>
+              <div id="member-details" class="member-details" hidden></div>
+              <section id="member-medals" class="member-medals" aria-labelledby="member-medals-title" hidden>
+                <h3 id="member-medals-title"><i data-lucide="medal"></i>我的勋章</h3>
+                <div id="medal-list" class="medal-list"></div>
+              </section>
+              <span>最近查询 <b id="asset-updated">--</b></span>
+            </div>
           </div>
           <div class="two-columns">
             <section class="today-section">

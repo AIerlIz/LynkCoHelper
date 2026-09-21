@@ -53,7 +53,19 @@ class Cloud:
                 raise ValueError('云端暂时不可用，请稍后重试')
             self.binding = {'id': 'fixture-binding', 'label': body['label'], 'status': 'active', 'scheduleTime': body.get('scheduleTime', '08:00-10:00'),
                             'doShare': body['doShare'], 'canShare': True, 'nextRunAt': time.time() * 1000 + 3600000,
-                            'inventory': {'points': '780', 'cards': 12, 'energy': 18, 'days': 16}}
+                            'inventory': {
+                                'points': '780', 'cards': 12, 'energy': 18, 'days': 16,
+                                'details': [
+                                    {'key': 'memberLevel.levelName', 'label': '会员等级', 'value': '银色探索者',
+                                     'iconUrl': 'https://github.githubassets.com/favicons/favicon.png'},
+                                    {'key': 'memberLevel.growthValue', 'label': '成长值', 'value': '1260'},
+                                ],
+                                'medals': [
+                                    {'name': '连续签到', 'description': '连续签到 7 天',
+                                     'iconUrl': 'https://github.githubassets.com/favicons/favicon.png'},
+                                    {'name': '分享达人'},
+                                ],
+                            }}
             return self.binding
         if path.startswith('/v1/binding/runs'):
             if method == 'POST':

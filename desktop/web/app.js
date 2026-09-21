@@ -78,6 +78,77 @@
     $(id).hidden = !visible;
   };
   const icons = () => window.lucide?.createIcons();
+  function safeImageUrl(value) {
+    if (typeof value !== "string" || value.length > 2048) return null;
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" ? url.href : null;
+    } catch {
+      return null;
+    }
+  }
+  function memberVisual(url, fallbackIcon) {
+    const visual = document.createElement("span");
+    visual.className = "member-visual";
+    const fallback = document.createElement("i");
+    fallback.setAttribute("data-lucide", fallbackIcon);
+    visual.append(fallback);
+    const source = safeImageUrl(url);
+    if (source) {
+      const image = document.createElement("img");
+      image.src = source;
+      image.alt = "";
+      image.loading = "lazy";
+      image.referrerPolicy = "no-referrer";
+      image.addEventListener("load", () => fallback.remove(), { once: true });
+      image.addEventListener("error", () => image.remove(), { once: true });
+      visual.prepend(image);
+    }
+    return visual;
+  }
+  function renderMemberAssets(inventory = {}) {
+    const detailHost = $("member-details");
+    const medalHost = $("medal-list");
+    detailHost.replaceChildren();
+    medalHost.replaceChildren();
+    const details = Array.isArray(inventory.details)
+      ? inventory.details.filter(item => item && typeof item.label === "string" && typeof item.value === "string").slice(0, 32)
+      : [];
+    const medals = Array.isArray(inventory.medals)
+      ? inventory.medals.filter(item => item && typeof item.name === "string").slice(0, 48)
+      : [];
+    details.forEach((item) => {
+      const row = document.createElement("div");
+      row.className = "member-detail";
+      row.append(memberVisual(item.iconUrl, "sparkles"));
+      const copy = document.createElement("div");
+      const label = document.createElement("small");
+      const value = document.createElement("strong");
+      label.textContent = item.label;
+      value.textContent = item.value;
+      copy.append(label, value);
+      row.append(copy);
+      detailHost.append(row);
+    });
+    medals.forEach((item) => {
+      const row = document.createElement("div");
+      row.className = "medal-item";
+      row.append(memberVisual(item.iconUrl, "medal"));
+      const copy = document.createElement("div");
+      const name = document.createElement("strong");
+      name.textContent = item.name;
+      copy.append(name);
+      if (typeof item.description === "string" && item.description) {
+        const description = document.createElement("small");
+        description.textContent = item.description;
+        copy.append(description);
+      }
+      row.append(copy);
+      medalHost.append(row);
+    });
+    show("member-details", details.length > 0);
+    show("member-medals", medals.length > 0);
+  }
   const date = (value, withTime = true) =>
     value
       ? new Intl.DateTimeFormat("zh-CN", {
@@ -462,6 +533,7 @@
       text("points", inventory?.points ?? latest?.pointsAfter ?? latest?.pointsBefore ?? "--");
       text("sign-cards", inventory?.cards != null ? inventory.cards : binding.inventoryError ? "查询失败" : "暂无");
       text("energy", inventory?.energy != null ? `${inventory.energy}` : latest?.energyAfter != null ? `${latest.energyAfter}` : binding.inventoryError ? "查询失败" : "暂无");
+      renderMemberAssets(inventory);
       text("asset-updated", state.lastRefreshAt ? date(state.lastRefreshAt) : "暂无");
       text(
         "last-result",

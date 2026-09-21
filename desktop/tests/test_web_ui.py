@@ -106,6 +106,20 @@ class WebUIContractTests(unittest.TestCase):
         task_helper = JS[JS.index('function taskIcon'):JS.index('const show =')]
         self.assertNotIn('className =', task_helper)
 
+    def test_member_info_assets_include_dynamic_details_and_medals(self):
+        self.assertIn('id="member-details"', HTML)
+        self.assertIn('id="member-medals"', HTML)
+        self.assertIn('id="medal-list"', HTML)
+        self.assertIn('function renderMemberAssets', JS)
+        self.assertIn('inventory.details', JS)
+        self.assertIn('inventory.medals', JS)
+        self.assertIn('.slice(0, 48)', JS)
+        self.assertIn('function safeImageUrl', JS)
+        self.assertIn('data-lucide="medal"', HTML)
+        self.assertIn('memberVisual(item.iconUrl, "medal")', JS)
+        self.assertIn('.member-details', CSS)
+        self.assertIn('.medal-list', CSS)
+
     def test_tablet_layout_does_not_reserve_removed_sidebar_space(self):
         self.assertRegex(CSS, r'@media\s*\(max-width:\s*1050px\)\s*and\s*\(min-width:\s*721px\)[^{]*\{[\s\S]*?main\s*\{[^}]*margin:\s*0 auto[^}]*width:\s*100%', re.S)
 
