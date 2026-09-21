@@ -49,7 +49,8 @@ class ProxyManager:
         else:
             ports = {'proxy': 55255, 'certificate': 55268}
             ports_path.write_text(json.dumps(ports))
-            ports_path.chmod(0o600)
+            if os.name != 'nt':
+                ports_path.chmod(0o600)
         if any(type(ports.get(k)) is not int or not 1024 <= ports[k] <= 65535 for k in ('proxy', 'certificate')) or ports['proxy'] == ports['certificate']:
             raise ValueError('固定端口配置无效')
         self.fixed_ports = ports
@@ -57,7 +58,8 @@ class ProxyManager:
     def _write_state(self):
         temporary = self.state_path.with_suffix('.tmp')
         temporary.write_text(json.dumps({'peerIp': self.peer, 'captureEnabled': self.capture_enabled}))
-        temporary.chmod(0o600)
+        if os.name != 'nt':
+            temporary.chmod(0o600)
         temporary.replace(self.state_path)
 
     def accepts_peer(self, peer):
