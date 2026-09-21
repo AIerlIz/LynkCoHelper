@@ -29,15 +29,15 @@
 ```sh
 python3.12 -m venv .venv
 .venv/bin/python -m pip install -r desktop/requirements.lock
-.venv/bin/python -m unittest discover -s tests/desktop -v
+.venv/bin/python -m unittest discover -s desktop/tests -v
 .venv/bin/python -m desktop.launcher
 .venv/bin/python desktop/packaging/build.py
-.venv/bin/python tests/desktop/packaged_smoke.py dist/LynkCoHelper.app/Contents/MacOS/LynkCoHelper
+.venv/bin/python desktop/tests/packaged_smoke.py dist/LynkCoHelper.app/Contents/MacOS/LynkCoHelper
 ```
 
 Windows 使用 `.venv\Scripts\python.exe`。手动触发 `Build desktop assistant` 工作流可构建 Windows x64、macOS ARM64 / Intel；日常任务不依赖 GitHub Actions。当前发行包没有付费开发者签名/公证，首次分发可能遇到系统安全确认，不应关闭系统安全功能。
 
-`desktop/service.json` 仅包含公开服务地址。云端 Worker、管理后台及数据库结构独立维护在私有仓库 `shovelshit/LynkCoHelper-Cloud`，客户端构建不需要访问该仓库。发布包在启动本地服务或代理前校验网页、服务地址和代理插件的 SHA-256 清单，清单摘要编译进程序，发现缺失或被修改时拒绝启动。源码运行不执行发布校验，发布版没有环境变量跳过入口。此机制不保护可执行文件本身，也不能阻止修改程序以绕过检查，不等同于发布者数字签名。`tests/desktop/ui_harness.py` 只使用测试账号和积分，绝不打包进应用；浏览器测试通过不代表真实账号签到成功。
+`desktop/service.json` 仅包含公开服务地址。云端 Worker、管理后台及数据库结构独立维护在私有仓库 `shovelshit/LynkCoHelper-Cloud`，客户端构建不需要访问该仓库。发布包在启动本地服务或代理前校验网页、服务地址和代理插件的 SHA-256 清单，清单摘要编译进程序，发现缺失或被修改时拒绝启动。源码运行不执行发布校验，发布版没有环境变量跳过入口。此机制不保护可执行文件本身，也不能阻止修改程序以绕过检查，不等同于发布者数字签名。`desktop/tests/ui_harness.py` 只使用测试账号和积分，绝不打包进应用；浏览器测试通过不代表真实账号签到成功。
 
 ## 验收边界
 
