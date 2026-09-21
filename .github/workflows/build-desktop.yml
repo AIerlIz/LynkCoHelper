@@ -81,4 +81,7 @@ jobs:
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
           SOURCE_SHA: ${{ github.sha }}
         run: |
-          gh release create "$RELEASE_TAG" release/* --target "$SOURCE_SHA" --title "LynkCoHelper $RELEASE_TAG" --generate-notes
+          assets=()
+          while IFS= read -r -d '' asset; do assets+=("$asset"); done < <(find release -maxdepth 1 -type f -print0)
+          ((${#assets[@]} > 0)) || { echo 'No release files found'; exit 1; }
+          gh release create "$RELEASE_TAG" "${assets[@]}" --target "$SOURCE_SHA" --title "LynkCoHelper $RELEASE_TAG" --generate-notes
