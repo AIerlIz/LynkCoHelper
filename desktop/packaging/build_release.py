@@ -4,6 +4,7 @@ import argparse
 import hashlib
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -31,11 +32,14 @@ generated.mkdir(parents=True, exist_ok=True)
 url = f'https://github.com/shovelshit/LynkCoHelper/releases/download/{quote(args.tag)}/{archive.name}'
 executable = 'LynkCoHelper/LynkCoHelper.exe' if args.platform == 'windows-x64' else 'LynkCoHelper.app/Contents/MacOS/LynkCoHelper'
 (generated / '_bootstrap_release.py').write_text(f'URL = {url!r}\nSHA256 = {checksum!r}\nEXECUTABLE = {executable!r}\n')
-subprocess.run([sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--onefile', '--windowed',
+mode = '--onefile' if args.platform == 'windows-x64' else '--onedir'
+subprocess.run([sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', mode, '--windowed',
                 '--name', name, '--paths', str(generated), '--hidden-import', '_bootstrap_release',
                 '--distpath', str(out), '--workpath', str(root / 'build' / 'bootstrap'),
                 '--specpath', str(root / 'build' / 'bootstrap'), str(root / 'desktop' / 'bootstrap.py')], check=True)
 # A macOS executable needs its execute bit preserved during browser download.
 if args.platform != 'windows-x64':
-    subprocess.run(['ditto', '-c', '-k', '--keepParent', str(out / name), str(out / f'{name}-launcher.zip')], check=True)
-    (out / name).unlink()
+    launcher = out / f'{name}.app'
+    archive_path = out / f'{name}-launcher.zip'
+    subprocess.run(['ditto', '-c', '-k', '--keepParent', launcher.name, archive_path.name], cwd=out, check=True)
+    shutil.rmtree(launcher)
