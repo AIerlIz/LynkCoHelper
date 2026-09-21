@@ -64,6 +64,15 @@ class LocalAPITests(unittest.TestCase):
     def test_internal_callback_has_separate_authorization(self):
         self.assertEqual(self.request('/internal/capture', body={'session': SESSION})[0], 401)
 
+    def test_rejected_post_does_not_poison_keepalive_connection(self):
+        client = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=2)
+        headers = {'Authorization': 'Bearer local-secret', 'Content-Type': 'application/json'}
+        client.request('POST', '/internal/capture', json.dumps({'session': SESSION}), headers)
+        self.assertEqual(client.getresponse().status, 401)
+        client.request('GET', '/api/status', headers={'Authorization': 'Bearer local-secret'})
+        self.assertEqual(client.getresponse().status, 200)
+        client.close()
+
     def test_traversal_does_not_serve_local_files(self):
         for path in ['/../capture.py', '/%2e%2e/capture.py', '/env.json', '/desktop/capture.py']:
             self.assertEqual(self.request(path)[0], 404)

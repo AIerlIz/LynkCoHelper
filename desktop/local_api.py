@@ -26,6 +26,17 @@ def make_server(controller, web_root, api_token, callback_token, port=0):
             self.end_headers()
             self.wfile.write(body)
 
+        def discard_request_body(self):
+            """Drain a bounded body before rejecting auth so keep-alive stays usable on Windows."""
+            if self.command != 'POST':
+                return
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+            except (TypeError, ValueError):
+                return
+            if 0 < length <= 32768:
+                self.rfile.read(length)
+
         def dispatch(self):
             origin = 'http://127.0.0.1:' + str(self.server.server_port)
             if self.headers.get('Host') != origin[7:] or self.headers.get('Origin', origin) != origin:
@@ -35,6 +46,7 @@ def make_server(controller, web_root, api_token, callback_token, port=0):
             if path.startswith(('/api/', '/internal/')):
                 expected = callback_token if internal else api_token
                 if not hmac.compare_digest(self.headers.get('Authorization', ''), 'Bearer ' + expected):
+                    self.discard_request_body()
                     return self.send(401, {'ok': False})
             elif self.command == 'GET':
                 assets = {'/': ('index.html', 'text/html; charset=utf-8'), '/app.js': ('app.js', 'text/javascript; charset=utf-8'),
