@@ -13,7 +13,7 @@
     <main>
       <div id="notice" class="notice" role="status" hidden></div>
       <h1 id="page-title" hidden>概览</h1>
-      <div class="utility-controls"><span id="cloud-status" class="status"><span class="dot"></span>正在连接</span><span id="last-sync" class="muted"></span><button id="refresh" class="icon-button" title="刷新云端状态" aria-label="刷新云端状态"><i data-lucide="refresh-cw"></i></button><button id="quit" class="icon-button" title="退出助手" aria-label="退出助手"><i data-lucide="power"></i></button></div>
+      <div class="utility-controls" hidden><span id="cloud-status" class="status"><span class="dot"></span>正在连接</span><span id="last-sync" class="muted"></span><button id="refresh" class="icon-button" title="刷新云端状态" aria-label="刷新云端状态"><i data-lucide="refresh-cw"></i></button><button id="quit" class="icon-button" title="退出助手" aria-label="退出助手"><i data-lucide="power"></i></button></div>
       <section id="identity-panel" hidden>
         <div class="section-heading">
           <i data-lucide="cloud"></i>
@@ -54,29 +54,19 @@
           </button>
         </div>
         <div id="account-overview" hidden>
-          <div class="account-heading">
+          <div class="account-strip">
+            <div id="account-avatar" class="avatar">账</div>
             <div>
-              <h2 id="account-label"></h2>
-              <p id="account-schedule" class="muted"></p>
+              <h2 id="account-label" class="account-name"></h2>
+              <p id="account-schedule" class="account-meta"></p>
             </div>
-            <div class="account-heading-actions"><span id="account-status" class="badge"></span><button id="binding-settings" type="button"><i data-lucide="settings-2"></i>绑定设置</button></div>
+            <div class="account-strip-actions"><span id="account-status" class="badge"></span><button id="binding-settings" type="button"><i data-lucide="settings-2"></i>绑定设置</button></div>
           </div>
           <div class="metrics">
-            <div><p>签到卡剩余</p><strong id="sign-cards">暂无</strong><span>以最近一次查询为准</span></div>
-            <div><p>连续签到</p><strong id="continue-days">暂无</strong><span>以领克返回天数为准</span></div>
-            <div>
-              <p>最近积分</p>
-              <strong id="points">--</strong><span>以最近一次运行结果为准</span>
-            </div>
-            <div>
-              <p>下次执行</p>
-              <strong id="next-run">--</strong><span>北京时间</span>
-            </div>
-            <div>
-              <p>最近运行</p>
-              <strong id="last-result">--</strong
-              ><span id="last-run-date">暂无记录</span>
-            </div>
+            <div class="asset-metric"><p><i data-lucide="wallet-cards"></i>当前资产</p><div class="asset-values"><span><strong id="points">--</strong><small>积分</small></span><b></b><span><strong id="sign-cards">暂无</strong><small>签到卡</small></span><b></b><span><strong id="energy">暂无</strong><small>能量体</small></span></div><span>以最近一次查询为准</span></div>
+            <div><p><i data-lucide="flame"></i>连续签到</p><strong id="continue-days">暂无</strong><span>连续任务天数</span></div>
+            <div><p><i data-lucide="clock-3"></i>下次执行</p><strong id="next-run">--</strong><span>北京时间</span></div>
+            <div><p><i data-lucide="activity"></i>最近运行</p><strong id="last-result">--</strong><span id="last-run-date">暂无记录</span></div>
           </div>
           <div class="action-row">
             <button id="run-now" class="primary">

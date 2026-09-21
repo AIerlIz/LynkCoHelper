@@ -15,8 +15,6 @@ RELEASE_FILES = (
     "web/app.js",
     "web/style.css",
     "web/lucide.js",
-    "web/admin.html",
-    "web/admin.js",
     "web/LUCIDE-LICENSE",
 )
 

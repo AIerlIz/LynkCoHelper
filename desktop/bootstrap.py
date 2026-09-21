@@ -37,6 +37,9 @@ class ProgressUI:
             self.root.geometry('460x180')
             self.root.resizable(False, False)
             self.root.protocol('WM_DELETE_WINDOW', lambda: None)
+            self.root.lift()
+            self.root.attributes('-topmost', True)
+            self.root.after(800, lambda: self.root.attributes('-topmost', False))
             frame = ttk.Frame(self.root, padding=24)
             frame.pack(fill='both', expand=True)
             self.label = ttk.Label(frame, text='🔍 正在检查版本', font=('Arial', 15))
@@ -53,6 +56,8 @@ class ProgressUI:
         if self.root:
             self.label.config(text=text)
             self.detail.config(text=detail)
+            self.progress.stop()
+            self.progress.config(mode='determinate')
             self.progress.config(value=0)
             self.root.update_idletasks()
             self.root.update()
@@ -61,8 +66,12 @@ class ProgressUI:
 
     def download(self, done, total):
         if self.root:
-            value = (done / total * 100) if total else 0
-            self.progress.config(value=value)
+            if total:
+                self.progress.stop()
+                self.progress.config(mode='determinate', value=done / total * 100)
+            else:
+                self.progress.config(mode='indeterminate')
+                self.progress.start(12)
             self.detail.config(text=f'{done / 1048576:.1f} MB' + (f' / {total / 1048576:.1f} MB' if total else ''))
             self.root.update_idletasks()
             self.root.update()
@@ -88,6 +97,7 @@ class ProgressUI:
 
     def close(self):
         if self.root:
+            self.progress.stop()
             self.root.destroy()
 
 

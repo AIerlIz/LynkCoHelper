@@ -297,6 +297,18 @@
     }
     if (binding) {
       text("account-label", binding.label);
+      const avatarUrl = binding.avatarUrl || binding.avatarurl || binding.profile?.avatarUrl || binding.profile?.avatarurl;
+      const avatar = $("account-avatar");
+      avatar.replaceChildren();
+      if (avatarUrl) {
+        const image = document.createElement("img");
+        image.src = avatarUrl;
+        image.alt = "账号头像";
+        image.onerror = () => { avatar.textContent = (binding.label || "账").slice(0, 1); };
+        avatar.append(image);
+      } else {
+        avatar.textContent = (binding.label || "账").slice(0, 1);
+      }
       text("account-status", labels[binding.status] || binding.status);
       $("account-status").className =
         "badge " + (binding.status === "active" ? "" : "warning");
@@ -312,6 +324,7 @@
       text("points", latest?.pointsAfter ?? latest?.pointsBefore ?? "--");
       const inventory = binding.inventory;
       text("sign-cards", inventory?.cards != null ? `${inventory.cards} 张` : binding.inventoryError ? "查询失败" : "暂无");
+      text("energy", inventory?.energy != null ? `${inventory.energy}` : latest?.energyAfter != null ? `${latest.energyAfter}` : binding.inventoryError ? "查询失败" : "暂无");
       text("continue-days", inventory?.days != null ? `${inventory.days} 天` : binding.inventoryError ? "查询失败" : "暂无");
       text(
         "last-result",
