@@ -217,7 +217,7 @@
       .forEach((element) => {
         if (element.id !== "settings-share") element.disabled = !binding;
       });
-    $("delete-binding").disabled = !binding;
+    $("binding-unbind").disabled = !binding;
     ["bind", "settings"].forEach(prefix => {
       const available = selectedSlotAvailable(prefix);
       const form = $(prefix === "bind" ? "activate-form" : "settings-form");

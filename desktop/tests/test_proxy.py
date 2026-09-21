@@ -47,6 +47,7 @@ class ProxyLifecycleTests(unittest.TestCase):
                     certificate = response.read()
                     self.assertIn(b'BEGIN CERTIFICATE', certificate)
                     self.assertNotIn(b'PRIVATE KEY', certificate)
+                    self.assertEqual(response.headers.get('Content-Disposition'), 'attachment; filename="LynkCoHelper-CA.cer"')
                 for path in ['/mitmproxy-ca.pem', '/../ca/mitmproxy-ca.pem', '/env.json']:
                     from urllib.parse import urlsplit
                     parsed = urlsplit(state['pairUrl'])

@@ -31,7 +31,7 @@ generated.mkdir(parents=True, exist_ok=True)
 url = f'https://github.com/shovelshit/LynkCoHelper/releases/download/{quote(args.tag)}/{archive.name}'
 executable = 'LynkCoHelper/LynkCoHelper.exe' if args.platform == 'windows-x64' else 'LynkCoHelper.app/Contents/MacOS/LynkCoHelper'
 (generated / '_bootstrap_release.py').write_text(f'URL = {url!r}\nSHA256 = {checksum!r}\nEXECUTABLE = {executable!r}\n')
-subprocess.run([sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--onefile', '--console',
+subprocess.run([sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--onefile', '--windowed',
                 '--name', name, '--paths', str(generated), '--hidden-import', '_bootstrap_release',
                 '--distpath', str(out), '--workpath', str(root / 'build' / 'bootstrap'),
                 '--specpath', str(root / 'build' / 'bootstrap'), str(root / 'desktop' / 'bootstrap.py')], check=True)

@@ -147,6 +147,8 @@ class ProxyManager:
                     self.send_response(200)
                     self.send_header('Content-Type', mime)
                     self.send_header('Content-Length', str(len(body)))
+                    if self.path.endswith('/certificate.cer'):
+                        self.send_header('Content-Disposition', 'attachment; filename="LynkCoHelper-CA.cer"')
                     self.send_header('Cache-Control', 'no-store')
                     self.send_header('Referrer-Policy', 'no-referrer')
                     self.send_header('X-Content-Type-Options', 'nosniff')
