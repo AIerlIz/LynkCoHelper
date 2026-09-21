@@ -2,12 +2,14 @@
 
 import hashlib
 import json
+import ssl
 import threading
 import time
 import uuid
+import certifi
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+from urllib.request import HTTPSHandler, HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -27,8 +29,9 @@ class CloudClient:
         if (parsed.scheme != 'https' and not (parsed.scheme == 'http' and parsed.hostname in {'127.0.0.1', 'localhost'})) or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ('', '/'):
             raise ValueError('云端地址必须是 HTTPS 服务地址')
         self.base_url = base_url.rstrip('/')
-        self.opener = build_opener(NoRedirect())
-        self.direct_opener = build_opener(ProxyHandler({}), NoRedirect())
+        context = ssl.create_default_context(cafile=certifi.where())
+        self.opener = build_opener(HTTPSHandler(context=context), NoRedirect())
+        self.direct_opener = build_opener(ProxyHandler({}), HTTPSHandler(context=context), NoRedirect())
         self.loopback = parsed.hostname in {'127.0.0.1', 'localhost'}
         self.keys = {}
         self.lock = threading.Lock()

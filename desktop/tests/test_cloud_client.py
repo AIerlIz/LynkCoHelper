@@ -3,7 +3,7 @@ import io
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from urllib.error import URLError
 from desktop.cloud_client import CloudClient, CloudError
 
@@ -78,6 +78,21 @@ class CloudClientTests(unittest.TestCase):
 
         client.opener.open.assert_called_once()
         client.direct_opener.open.assert_called_once()
+
+    @patch('desktop.cloud_client.build_opener')
+    @patch('desktop.cloud_client.ssl.create_default_context')
+    @patch('desktop.cloud_client.certifi.where', return_value='/bundled/cacert.pem')
+    def test_https_uses_the_bundled_ca_bundle(self, certifi_where, create_context, build_opener):
+        context = Mock()
+        create_context.return_value = context
+
+        CloudClient('https://cloud.example')
+
+        create_context.assert_called_once_with(cafile='/bundled/cacert.pem')
+        self.assertEqual(build_opener.call_count, 2)
+        for call in build_opener.call_args_list:
+            handlers = call.args
+            self.assertTrue(any(getattr(handler, '_context', None) is context for handler in handlers))
 
 
 if __name__ == '__main__':
