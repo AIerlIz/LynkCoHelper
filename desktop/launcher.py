@@ -6,6 +6,7 @@ import json
 import os
 import secrets
 import signal
+import subprocess
 import sys
 import threading
 import webbrowser
@@ -63,6 +64,17 @@ def check_integrity():
             except Exception:
                 pass
         raise SystemExit(message)
+
+
+def open_user_page(url):
+    """Open the local user page through the platform's foreground launcher."""
+    if sys.platform == 'darwin':
+        try:
+            subprocess.Popen(['open', url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        except OSError:
+            pass
+    return webbrowser.open(url)
 
 
 def main():
@@ -143,7 +155,7 @@ def main():
 
         threading.Thread(target=watch_bootstrap, daemon=True).start()
     if not options.no_browser:
-        webbrowser.open(url)
+        open_user_page(url)
     try:
         server.serve_forever()
     finally:

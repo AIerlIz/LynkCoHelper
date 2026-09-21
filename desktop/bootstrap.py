@@ -25,9 +25,9 @@ MAX_EXTRACTED = 2 * 1024 * 1024 * 1024
 class ProgressUI:
     def __init__(self):
         self.root = self.label = self.detail = self.progress = None
-        # PyInstaller's windowed launcher has no standard output; source runs,
-        # CI, and SSH sessions keep terminal output and must never block on Tk.
-        if sys.stdout is not None and os.environ.get('LYNKCO_FORCE_PROGRESS_UI') != '1':
+        # Release launchers always show a Tk window. Source and test runs keep
+        # terminal output unless the UI is explicitly requested.
+        if not getattr(sys, 'frozen', False) and os.environ.get('LYNKCO_FORCE_PROGRESS_UI') != '1':
             return
         try:
             import tkinter as tk
@@ -39,7 +39,9 @@ class ProgressUI:
             self.root.protocol('WM_DELETE_WINDOW', lambda: None)
             self.root.lift()
             self.root.attributes('-topmost', True)
-            self.root.after(800, lambda: self.root.attributes('-topmost', False))
+            self.root.focus_force()
+            self.root.deiconify()
+            self.root.after(3000, lambda: self.root.attributes('-topmost', False))
             frame = ttk.Frame(self.root, padding=24)
             frame.pack(fill='both', expand=True)
             self.label = ttk.Label(frame, text='🔍 正在检查版本', font=('Arial', 15))
