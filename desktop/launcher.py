@@ -76,6 +76,8 @@ def main():
     parser.add_argument('--no-browser', action='store_true')
     parser.add_argument('--cloud-url')
     parser.add_argument('--state-dir', type=Path)
+    parser.add_argument('--bootstrap-parent')
+    parser.add_argument('--bootstrap-stop', type=Path)
     options = parser.parse_args()
     import desktop
     package_root = Path(desktop.__file__).parent
@@ -120,6 +122,26 @@ def main():
 
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
+    if options.bootstrap_parent:
+        import psutil
+        import time
+        parent = json.loads(options.bootstrap_parent)
+
+        def watch_bootstrap():
+            while True:
+                if options.bootstrap_stop and options.bootstrap_stop.exists():
+                    break
+                try:
+                    if psutil.Process(parent['pid']).create_time() != parent['created']:
+                        break
+                except psutil.NoSuchProcess:
+                    break
+                except psutil.AccessDenied:
+                    pass
+                time.sleep(1)
+            server.shutdown()
+
+        threading.Thread(target=watch_bootstrap, daemon=True).start()
     if not options.no_browser:
         webbrowser.open(url)
     try:

@@ -4,7 +4,7 @@
 
 ## 使用
 
-1. 解压发行包，打开 `LynkCoHelper.app`（macOS）或 `LynkCoHelper.exe`（Windows）。Windows 请保留同目录依赖文件。
+1. 从 [GitHub Releases](https://github.com/shovelshit/LynkCoHelper/releases) 下载对应平台的 `LynkCoHelper-cloud-*` 启动器。Windows 直接打开 `.exe`；macOS 解压 `*-launcher.zip` 后打开其中的可执行文件。启动器自动下载对应版本的资源包、校验、解压并运行客户端，无需用户安装 Python 或自行打包。
 2. 把管理员发来的领取链接粘贴到助手，领取用户身份并保存恢复码。更换电脑时使用恢复码，恢复后旧管理凭证失效。
 3. 电脑、手机连接同一局域网。在「绑定账号」选择手机系统和电脑网络。
 4. 手机扫码配对，安装本机证书。iPhone 安装描述文件后，还要在「关于本机 → 证书信任设置」开启完全信任。
@@ -13,6 +13,10 @@
 7. 关闭手机 Wi-Fi 代理，移除本次证书，再在助手中确认断开连接。电脑此后可以关机。
 
 关闭浏览器不会退出后台；使用「退出助手」停止程序。页面刷新丢失连接时，重新双击应用即可。不要在手机代理开启时强制退出。
+
+启动器显示下载进度状态并等待客户端退出。使用「退出助手」会清理本次下载与解压目录；关闭启动器也会通知客户端退出，关闭前应先关闭手机代理。强制结束或断电时可能留下临时资源，下次启动仅清理已退出进程的旧目录。账号管理凭据、本机 CA 和设置保留，不属于临时程序资源。每次启动重新下载，需要能访问 GitHub 和其 Release 附件域名。
+
+资源包和启动器放在同一 GitHub Release，资源名为 `LynkCoHelper-cloud-<平台>-resources.tar.gz`，平台为 `windows-x64`、`macos-arm64`、`macos-intel`。不要单独运行资源包；启动器内置对应版本资源的 SHA-256 和固定版本 URL。Release 的 `.sha256` 供人工检查，启动器不从网络获取信任基准。未签名启动器本身仍可能被替换，此方案不等同于发布者数字签名。macOS 首次运行可能受系统安全策略限制。
 
 分享默认关闭；需要本次手机的 glDevId，IMEI 非必需。登录或 refresh 请求捕获齐全后无需额外抓取 IMEI。不同安卓 App/系统版本是否接受用户证书仍需真机验证。
 
@@ -32,10 +36,11 @@ python3.12 -m venv .venv
 .venv/bin/python -m unittest discover -s desktop/tests -v
 .venv/bin/python -m desktop.launcher
 .venv/bin/python desktop/packaging/build.py
+.venv/bin/python desktop/packaging/build_release.py --tag cloud-v0.1.0 --platform macos-arm64
 .venv/bin/python desktop/tests/packaged_smoke.py dist/LynkCoHelper.app/Contents/MacOS/LynkCoHelper
 ```
 
-Windows 使用 `.venv\Scripts\python.exe`。手动触发 `Build desktop assistant` 工作流可构建 Windows x64、macOS ARM64 / Intel；日常任务不依赖 GitHub Actions。当前发行包没有付费开发者签名/公证，首次分发可能遇到系统安全确认，不应关闭系统安全功能。
+Windows 使用 `.venv\Scripts\python.exe`。手动触发 `Build desktop assistant` 并填写新的 `cloud-v` 版本号，例如 `cloud-v0.1.0`，会构建 Windows x64、macOS ARM64 / Intel。所有构建成功后发布 GitHub Release，包含启动器、资源包和校验文件；Actions artifact 只是中间产物。已有版本禁止覆盖，更新需发布新版本启动器。日常任务不依赖 GitHub Actions。当前发行包没有付费开发者签名/公证，首次分发可能遇到系统安全确认，不应关闭系统安全功能。
 
 `desktop/service.json` 仅包含公开服务地址。云端 Worker、管理后台及数据库结构独立维护在私有仓库 `shovelshit/LynkCoHelper-Cloud`，客户端构建不需要访问该仓库。发布包在启动本地服务或代理前校验网页、服务地址和代理插件的 SHA-256 清单，清单摘要编译进程序，发现缺失或被修改时拒绝启动。源码运行不执行发布校验，发布版没有环境变量跳过入口。此机制不保护可执行文件本身，也不能阻止修改程序以绕过检查，不等同于发布者数字签名。`desktop/tests/ui_harness.py` 只使用测试账号和积分，绝不打包进应用；浏览器测试通过不代表真实账号签到成功。
 
