@@ -57,7 +57,7 @@ class ProgressUI:
             self.root.update_idletasks()
             self.root.update()
         else:
-            print(text, detail, flush=True)
+            self._terminal(text, detail)
 
     def download(self, done, total):
         if self.root:
@@ -72,7 +72,19 @@ class ProgressUI:
             from tkinter import messagebox
             messagebox.showerror('启动失败', message, parent=self.root)
         else:
-            print(message, file=sys.stderr, flush=True)
+            self._terminal(message, error=True)
+
+    @staticmethod
+    def _terminal(*parts, error=False):
+        stream = sys.stderr if error else sys.stdout
+        if stream is None:
+            return
+        try:
+            print(*parts, file=stream, flush=True)
+        except UnicodeEncodeError:
+            encoding = getattr(stream, 'encoding', None) or 'ascii'
+            safe = ' '.join(str(part).encode(encoding, 'replace').decode(encoding) for part in parts)
+            print(safe, file=stream, flush=True)
 
     def close(self):
         if self.root:
