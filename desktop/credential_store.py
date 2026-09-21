@@ -21,7 +21,7 @@ class CredentialStore:
             value = self._keyring().get_password('LynkCoHelper', self.account)
             return json.loads(value) if value else None
         except Exception:
-            raise ValueError('无法读取系统凭据库，请允许领克助手访问钥匙串或凭据管理器') from None
+            raise ValueError('无法读取系统凭据库，请允许每日任务助手访问钥匙串或凭据管理器') from None
 
     def save(self, value):
         try:

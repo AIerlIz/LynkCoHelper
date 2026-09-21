@@ -13,10 +13,18 @@ from urllib.request import Request, urlopen
 executable = Path(sys.argv[1]).resolve()
 with tempfile.TemporaryDirectory() as directory:
     root = Path(directory)
-    app = subprocess.Popen([str(executable), '--no-browser', '--state-dir', str(root / 'state')],
+    ports = []
+    for _ in range(3):
+        with socket.socket() as probe:
+            probe.bind(('127.0.0.1', 0))
+            ports.append(probe.getsockname()[1])
+    (root / 'state').mkdir()
+    (root / 'state' / 'ports.json').write_text(json.dumps({'proxy': ports[0], 'certificate': ports[1]}))
+    app = subprocess.Popen([str(executable), '--no-browser', '--state-dir', str(root / 'state'),
+                            '--cloud-url', f'http://127.0.0.1:{ports[2]}'],
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
-        deadline = time.monotonic() + 15
+        deadline = time.monotonic() + 45
         while not (root / 'state' / 'instance.json').exists():
             if app.poll() is not None or time.monotonic() > deadline:
                 detail = app.stderr.read().decode(errors='replace') if app.poll() is not None else 'still waiting for startup'
@@ -36,9 +44,7 @@ with tempfile.TemporaryDirectory() as directory:
         if app.poll() is None:
             app.terminate()
             app.wait(timeout=8)
-    with socket.socket() as probe:
-        probe.bind(('127.0.0.1', 0))
-        port = probe.getsockname()[1]
+    port = ports[0]
     proxy_state = root / 'proxy.json'
     proxy_state.write_text(json.dumps({'peerIp':'127.0.0.1','captureEnabled':False}))
     if sys.platform == 'darwin':

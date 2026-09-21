@@ -1,14 +1,17 @@
 "use strict";
 (() => {
   const $ = (id) => document.getElementById(id);
-  const token = location.hash.slice(1);
-  history.replaceState(null, "", location.pathname);
+  const tokenKey = "lynkco-helper.local-token";
+  const hashToken = location.hash.slice(1); if (hashToken) sessionStorage.setItem(tokenKey, hashToken);
+  const token = hashToken || sessionStorage.getItem(tokenKey) || "";
+  history.replaceState(null, "", location.pathname + location.search);
   let state = null,
     view = "overview",
     identityMode = "claim",
     platform = "IOS",
     busy = false;
-  let proxyConfirmed = false, exitCapture = false, activePair = null;
+  let proxyConfirmed = false, selectedBindingStep = null, activePair = null;
+  let autoPrepareKey = null;
   let qrUrl = null,
     qrPair = null,
     settingsVersion = "",
@@ -52,6 +55,25 @@
     node.className = `badge ${tone}`.trim();
     node.replaceChildren(Object.assign(document.createElement("i"), { ariaHidden: "true" }), document.createTextNode(value == null ? "--" : String(value)));
   };
+  function taskIcon(id, status) {
+    const node = $(id);
+    const success = ["success", "succeeded", "completed", "signed", "already_signed", "done"];
+    const failed = ["failed", "error"];
+    const running = ["running", "queued", "retry_wait", "inflight"];
+    const disabled = ["disabled", "skipped"];
+    const tone = success.includes(status) ? "success"
+      : failed.includes(status) ? "error"
+      : running.includes(status) ? "running"
+      : disabled.includes(status) ? "disabled"
+      : status === "unknown" ? "warning" : "pending";
+    const icon = tone === "success" ? "check"
+      : tone === "error" ? "x"
+      : tone === "running" ? "loader-circle"
+      : tone === "disabled" ? "minus"
+      : tone === "warning" ? "circle-help" : "clock-3";
+    node.setAttribute("class", `task-state-icon ${tone}`);
+    node.setAttribute("data-lucide", icon);
+  }
   const show = (id, visible) => {
     $(id).hidden = !visible;
   };
@@ -93,7 +115,7 @@
     show("notice", !!message);
   }
   async function api(path, body) {
-    if (!token) throw new Error("页面已失去本机连接，请重新双击打开领克助手。");
+    if (!token) throw new Error("页面已失去本机连接，请重新双击打开每日任务助手。");
     const response = await fetch(path, {
       method: body === undefined ? "GET" : "POST",
       headers: {
@@ -108,10 +130,25 @@
       throw new Error(result.error || "无法连接本机助手，请重新打开程序。");
     return result.data;
   }
-  async function perform(operation, message) {
+  function setButtonLoading(button, loading, label = "处理中") {
+    if (!button) return;
+    if (loading) {
+      button.classList.add("is-loading");
+      button.dataset.loadingLabel = `${label}…`;
+      button.setAttribute("aria-busy", "true");
+    } else {
+      button.classList.remove("is-loading");
+      delete button.dataset.loadingLabel;
+      button.removeAttribute("aria-busy");
+    }
+  }
+  async function perform(operation, message, trigger, loadingLabel) {
     if (busy) return;
     busy = true;
-    const buttons = [...document.querySelectorAll("button:not([disabled])")];
+    const buttons = [...document.querySelectorAll("button")];
+    const disabled = new Map(buttons.map((button) => [button, button.disabled]));
+    const activeButton = trigger?.closest?.("button") || document.activeElement?.closest?.("button");
+    setButtonLoading(activeButton, true, loadingLabel);
     buttons.forEach((button) => (button.disabled = true));
     try {
       await operation();
@@ -137,8 +174,9 @@
       );
     } finally {
       busy = false;
-      buttons.forEach((button) => (button.disabled = false));
-      applyCapabilities();
+      buttons.forEach((button) => (button.disabled = disabled.get(button)));
+      setButtonLoading(activeButton, false);
+      if (state) render();
     }
   }
   function navigate(next) {
@@ -157,6 +195,39 @@
       }[view],
     );
     render();
+  }
+  function resetBindingFlow() {
+    proxyConfirmed = false;
+    selectedBindingStep = null;
+    activePair = null;
+    autoPrepareKey = null;
+    qrPair = null;
+    if (qrUrl) {
+      URL.revokeObjectURL(qrUrl);
+      qrUrl = null;
+    }
+    $("pair-qr").removeAttribute("src");
+    $("upload-consent").checked = false;
+    $("proxy-removed").checked = false;
+  }
+  function captureFingerprint() {
+    if (state?.capture?.stage !== "captured") return null;
+    const event = [...(state.capture.events || [])]
+      .reverse()
+      .find((item) => item.outcome === "captured");
+    return event?.id || event?.at || `${state.proxy?.pairUrl || "local"}:${state.capture.events?.length || 0}`;
+  }
+  function silentlyPrepareCapture() {
+    if (busy || state?.capture?.stage !== "captured" || state.candidate || !$('upload-consent').checked)
+      return;
+    const key = captureFingerprint();
+    if (!key || autoPrepareKey === key) return;
+    autoPrepareKey = key;
+    text("auto-verify-status", "正在静默验证个人信息…");
+    perform(async () => {
+      await api("/api/candidates/prepare", { consent: true });
+      notice("");
+    });
   }
   function runTable(target, items) {
     const container = $(target);
@@ -271,9 +342,12 @@
     show("push-fields", selected !== "none");
     ["bark", "serverchan"].forEach(channel => {
       const active = selected === channel;
+      show(`${channel}-field`, active);
       $(`${channel}-key`).disabled = !active || !state?.binding;
-      $(`${channel}-clear`).disabled = !state?.binding;
+      $(`${channel}-clear`).disabled = !active || !state?.binding;
     });
+    $("push-save").disabled = !state?.binding;
+    text("push-save-label", selected === "none" ? "保存设置" : "保存并测试");
   }
   function renderScheduleWindows() {
     const items = state.scheduleWindows?.items;
@@ -314,7 +388,7 @@
     ["overview", "bind", "history"].forEach((name) =>
       show(
         "view-" + name,
-        name === view && state.hasIdentity,
+        name === view && state.hasIdentity && !forceRecover,
       ),
     );
     const online = state.connected && state.configured;
@@ -378,15 +452,16 @@
         : null;
       text("sign-task-detail", latestIsToday && latest.signStatus === "already_signed" ? "今日已完成，重复触发会自动跳过" : "每天执行一次");
       text("sign-task-reward", pointsDelta == null ? "待执行" : `${pointsDelta >= 0 ? "+" : ""}${pointsDelta} 积分`);
+      taskIcon("sign-task-icon", latestIsToday ? latest.signStatus : "pending");
       text("share-task-detail", binding.doShare ? "签到时同时完成分享" : "当前未开启分享");
       const shareEnergy = latest?.rewards?.signEnergy ?? latest?.shareEnergy;
       text("share-task-reward", !binding.doShare ? "已关闭" : shareEnergy == null ? "待执行" : `+${shareEnergy} 能量体`);
+      taskIcon("share-task-icon", !binding.doShare ? "disabled" : latestIsToday ? latest.shareStatus : "pending");
       text("next-run-label", binding.status === "active" && binding.nextRunAt ? `下一次执行：${date(binding.nextRunAt)}` : "下一次执行：已暂停");
-      text("points", latest?.pointsAfter ?? latest?.pointsBefore ?? "--");
       const inventory = binding.inventory;
+      text("points", inventory?.points ?? latest?.pointsAfter ?? latest?.pointsBefore ?? "--");
       text("sign-cards", inventory?.cards != null ? inventory.cards : binding.inventoryError ? "查询失败" : "暂无");
       text("energy", inventory?.energy != null ? `${inventory.energy}` : latest?.energyAfter != null ? `${latest.energyAfter}` : binding.inventoryError ? "查询失败" : "暂无");
-      text("continue-days", inventory?.days != null ? `${inventory.days} 天` : binding.inventoryError ? "查询失败" : "暂无");
       text("asset-updated", state.lastRefreshAt ? date(state.lastRefreshAt) : "暂无");
       text(
         "last-result",
@@ -429,36 +504,42 @@
     if (activePair !== proxy.pairUrl) {
       activePair = proxy.pairUrl;
       proxyConfirmed = false;
-      exitCapture = false;
+      selectedBindingStep = null;
+      autoPrepareKey = null;
     }
     const stage = capture.stage;
     const events = capture.events || [];
-    const step = stage === "cleanup" || exitCapture ? 4
+    if (["idle", "waiting"].includes(stage)) autoPrepareKey = null;
+    const flowStep = stage === "cleanup" ? 4
       : stage === "verified" && state.candidate ? 3
       : !proxy.running || !proxy.paired ? 0
       : proxyConfirmed || events.length || ["captured", "verified"].includes(stage) ? 2 : 1;
-    document.querySelectorAll("[data-step]").forEach((item) => {
-      item.classList.toggle("active", Number(item.dataset.step) === step);
-      item.classList.toggle("done", Number(item.dataset.step) < step);
+    const accessibleSteps = new Set([0]);
+    if (proxy.running) [1, 2, 4].forEach(item => accessibleSteps.add(item));
+    if (state.candidate) accessibleSteps.add(3);
+    if (selectedBindingStep != null && !accessibleSteps.has(selectedBindingStep)) selectedBindingStep = null;
+    const step = selectedBindingStep ?? flowStep;
+    document.querySelectorAll("[data-binding-step]").forEach((button) => {
+      const item = button.closest("li");
+      const itemStep = Number(button.dataset.bindingStep);
+      button.disabled = !accessibleSteps.has(itemStep);
+      item.classList.toggle("active", itemStep === step);
+      item.classList.toggle("done", itemStep < flowStep);
     });
-    show("bind-start", !proxy.running && stage !== "cleanup");
-    show(
-      "bind-connect",
-      proxy.running && step < 3 && stage !== "verified",
-    );
+    show("bind-start", !proxy.running && step === 0 && stage !== "cleanup");
+    show("bind-back", !!binding && !proxy.running && stage !== "cleanup");
+    show("bind-connect", proxy.running && step <= 2);
     show("pairing-step", step === 0);
     show("proxy-step", step === 1);
     show("capture-step", step === 2);
     show("capture-details", step === 2);
     show("capture-wait", stage === "waiting");
-    show("capture-ready", stage === "captured");
-    show("bind-confirm", step === 3);
+    show("capture-ready", ["captured", "verified"].includes(stage));
+    show("bind-confirm", step === 3 && !!state.candidate);
     show("bind-cleanup", step === 4);
     show("save-complete", stage === "cleanup");
     show("unsaved-exit", step === 4 && stage !== "cleanup");
     show("disconnect-panel", proxy.running && step === 4);
-    show("cancel-capture", proxy.running && step < 4);
-    show("continue-capture", proxy.running && exitCapture && stage !== "cleanup");
     text("traffic-status", events.length ? `代理已收到请求 · 当前 ${events.length} 条记录` : "尚未收到代理请求");
     text("proxy-address", proxy.address);
     text("proxy-port", proxy.port);
@@ -469,8 +550,22 @@
     $("capture-login-state").innerHTML = `<i class="state-dot"></i>${loginReady ? "已抓到" : "等待识别"}`;
     $("capture-profile-state").className = profileReady ? "capture-state ready" : "capture-state";
     $("capture-profile-state").innerHTML = `<i class="state-dot"></i>${profileReady ? "已抓到" : "等待验证"}`;
-    if (proxy.pairUrl && qrPair !== proxy.pairUrl) {
-      qrPair = proxy.pairUrl;
+    if (stage === "captured") {
+      text(
+        "auto-verify-status",
+        $("upload-consent").checked
+          ? autoPrepareKey === captureFingerprint()
+            ? "个人信息验证未完成；取消后重新勾选可重试。"
+            : "已同意上传，正在准备静默验证。"
+          : "勾选后会静默验证个人信息，无需再次点击。",
+      );
+      queueMicrotask(silentlyPrepareCapture);
+    } else if (stage === "verified") {
+      text("auto-verify-status", "个人信息验证完成，可以进入下一步。");
+    }
+    if (step === 0 && proxy.pairUrl && qrPair !== proxy.pairUrl) {
+      const requestedPair = proxy.pairUrl;
+      qrPair = requestedPair;
       fetch("/api/capture/qr", {
         headers: { Authorization: `Bearer ${token}` },
       })
@@ -479,11 +574,15 @@
           return response.blob();
         })
         .then((blob) => {
+          if (view !== "bind" || (selectedBindingStep ?? flowStep) !== 0 || state?.proxy?.pairUrl !== requestedPair) return;
           if (qrUrl) URL.revokeObjectURL(qrUrl);
           qrUrl = URL.createObjectURL(blob);
           $("pair-qr").src = qrUrl;
         })
-        .catch((error) => notice(error.message));
+        .catch((error) => {
+          if (view === "bind" && (selectedBindingStep ?? flowStep) === 0 && state?.proxy?.pairUrl === requestedPair)
+            notice(error.message);
+        });
     }
     text(
       "phone-instructions-title",
@@ -525,6 +624,7 @@
     .forEach((button) =>
       button.addEventListener("click", () => navigate("history")),
     );
+  $("bind-back").addEventListener("click", () => navigate("overview"));
   document.querySelectorAll("[data-platform]").forEach((button) =>
     button.addEventListener("click", () => {
       platform = button.dataset.platform;
@@ -541,11 +641,11 @@
       .forEach((item) =>
         item.classList.toggle("selected", item.dataset.identity === mode),
       );
-    text("identity-label", mode === "claim" ? "领取链接" : "恢复码或管理员恢复链接");
+    text("identity-label", mode === "claim" ? "邀请码" : "恢复码或管理员恢复链接");
     $("identity-code").placeholder =
-      mode === "claim" ? "粘贴管理员发来的领取链接" : "输入恢复码，或粘贴管理员恢复链接";
+      mode === "claim" ? "粘贴管理员发来的邀请码" : "输入恢复码，或粘贴管理员恢复链接";
     text("identity-submit", mode === "claim" ? "领取并连接" : "恢复账号");
-    text("identity-help", mode === "claim" ? "链接只用于本次领取，不会保存到电脑。" : "恢复码永久有效但使用后会轮换；管理员恢复链接 30 分钟内有效且只能兑换一次。");
+    text("identity-help", mode === "claim" ? "邀请码只用于本次领取；旧版完整领取链接也可以继续使用。" : "恢复码永久有效但使用后会轮换；管理员恢复链接 30 分钟内有效且只能兑换一次。");
   }
   document
     .querySelectorAll("[data-identity]")
@@ -560,7 +660,7 @@
       const result = await api(
         identityMode === "claim" ? "/api/claim" : "/api/recover",
         {
-          [identityMode === "claim" ? "claimUrl" : "recoveryCode"]:
+          [identityMode === "claim" ? "claimCode" : "recoveryCode"]:
             $("identity-code").value.trim(),
         },
       );
@@ -573,7 +673,7 @@
       show("recovery-warning", !result.saved);
       $("recovery-dialog").showModal();
       if (result.saved) await api("/api/refresh", {});
-    });
+    }, null, event.submitter, identityMode === "claim" ? "领取中" : "恢复中");
   });
   $("recovery-dialog").addEventListener("cancel", (event) =>
     event.preventDefault(),
@@ -594,7 +694,7 @@
     const blob = new Blob(
       [
         JSON.stringify(
-          { application: "LynkCoHelper", recoveryCode: recovery },
+          { application: "DailyTaskHelper", recoveryCode: recovery },
           null,
           2,
         ),
@@ -604,7 +704,7 @@
     const url = URL.createObjectURL(blob),
       anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = "领克助手-恢复码.json";
+    anchor.download = "每日任务助手-恢复码.json";
     anchor.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
@@ -632,29 +732,29 @@
       });
       $("upload-consent").checked = false;
       $("proxy-removed").checked = false;
+      autoPrepareKey = null;
       notice("");
-    });
+    }, null, event.submitter, "连接中");
   });
   $("proxy-next").addEventListener("click", () => {
     proxyConfirmed = true;
+    selectedBindingStep = 2;
     render();
   });
-  $("cancel-capture").addEventListener("click", () => {
-    exitCapture = true;
-    render();
-  });
-  $("continue-capture").addEventListener("click", () => {
-    exitCapture = false;
-    render();
-  });
-  $("prepare").addEventListener("click", () =>
-    perform(async () => {
-      if (!$("upload-consent").checked)
-        throw new Error("请先确认上传登录状态。");
-      await api("/api/candidates/prepare", { consent: true });
-      notice("");
+  document.querySelectorAll("[data-binding-step]").forEach((button) =>
+    button.addEventListener("click", () => {
+      selectedBindingStep = Number(button.dataset.bindingStep);
+      render();
     }),
   );
+  $("upload-consent").addEventListener("change", () => {
+    if (!$("upload-consent").checked) {
+      autoPrepareKey = null;
+      text("auto-verify-status", "勾选后会静默验证个人信息，无需再次点击。");
+      return;
+    }
+    silentlyPrepareCapture();
+  });
   function chosenWindow(prefix) {
     return $(`${prefix}-window`).value;
   }
@@ -671,48 +771,50 @@
     perform(async () => {
       if (!selectedSlotAvailable("bind")) throw new Error("请选择仍有名额的执行区间，或刷新云端状态。");
       await api("/api/candidates/activate", {
-        label: state.candidate.preview.displayName || "领克账号",
+        label: state.candidate.preview.displayName || "账号用户",
         scheduleTime: chosenWindow("bind"),
         doShare: $("bind-share").checked,
       });
-      view = "overview";
       notice("");
-    });
+    }, null, event.submitter, "保存中");
   });
-  $("stop-proxy").addEventListener("click", () =>
+  $("stop-proxy").addEventListener("click", (event) =>
     perform(async () => {
       if (!$("proxy-removed").checked)
         throw new Error("请先在手机上关闭 Wi-Fi 代理。");
       await api("/api/capture/stop", { proxyRemoved: true });
       qrPair = null;
       if (state.binding) navigate("overview");
-    }, "手机连接已断开，现在可以退出助手。"),
+    }, "手机连接已断开，现在可以退出助手。", event.currentTarget, "断开中"),
   );
-  $("refresh").addEventListener("click", () =>
+  $("refresh").addEventListener("click", (event) =>
     perform(async () => {
       historyItems = [];
       await api("/api/refresh", {});
-    }, "云端状态已更新"),
+    }, "云端状态已更新", event.currentTarget, "刷新中"),
   );
-  [$("run-now"), $("cleanup-run-now")].forEach((button) => button.addEventListener("click", () =>
+  [$("run-now"), $("cleanup-run-now")].forEach((button) => button.addEventListener("click", (event) =>
     perform(async () => {
       notice("正在执行签到，请稍候。");
       const result = await api("/api/binding/run", {});
       await api("/api/refresh", {});
       const completed = result.status === "completed";
       notice(completed ? "今日签到已完成。" : result.message || `签到任务：${labels[result.status] || result.status}`, completed);
-    }),
+    }, null, event.currentTarget, "签到中"),
   ));
-  $("pause").addEventListener("click", () =>
+  $("pause").addEventListener("click", (event) =>
     perform(
       () =>
         api("/api/binding/settings", {
           status: state.binding.status === "paused" ? "active" : "paused",
         }),
       "任务状态已更新",
+      event.currentTarget,
+      state.binding.status === "paused" ? "恢复中" : "暂停中",
     ),
   );
   $("settings-form").addEventListener("input", () => { settingsDirty = true; });
+  $("push-form").addEventListener("input", () => { settingsDirty = true; });
   document.querySelectorAll('input[name="push-channel"]').forEach((input) => input.addEventListener("change", () => {
     settingsDirty = true;
     updatePushChoice();
@@ -723,37 +825,46 @@
     perform(
       async () => {
         if (!selectedSlotAvailable("settings")) throw new Error("请选择仍有名额的执行区间，或刷新云端状态。");
-        const notifications = {};
-        const enabledChannels = ["bark", "serverchan"].filter(channel => $(`${channel}-enabled`).checked);
-        if (enabledChannels.length > 1) throw new Error("Bark 和 Server 酱只能选择一个推送渠道。");
-        ["bark", "serverchan"].forEach(channel => {
-          const enabled = $(`${channel}-enabled`).checked;
-          const key = $(`${channel}-key`).value.trim();
-          if (enabled && !key && !state.binding.notifications?.[channel]?.configured)
-            throw new Error(`请填写 ${channel === "bark" ? "Bark Device Key" : "Server 酱 SendKey"}。`);
-          notifications[channel] = {enabled, ...(key ? {key} : {})};
-        });
         await api("/api/binding/settings", {
           scheduleTime: chosenWindow("settings"),
           doShare: $("settings-share").checked,
-          notifications,
         });
-        $("bark-key").value = $("serverchan-key").value = "";
         settingsDirty = false;
         settingsVersion = "";
       },
       "设置已保存",
+      event.submitter,
+      "保存中",
     );
   });
+  $("push-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    perform(async () => {
+      const selected = document.querySelector('input[name="push-channel"]:checked')?.value || "none";
+      const notifications = {};
+      ["bark", "serverchan"].forEach(channel => {
+        const enabled = selected === channel;
+        const key = $(`${channel}-key`).value.trim();
+        if (enabled && !key && !state.binding.notifications?.[channel]?.configured)
+          throw new Error(`请填写 ${channel === "bark" ? "Bark Device Key" : "Server 酱 SendKey"}。`);
+        notifications[channel] = {enabled, ...(key ? {key} : {})};
+      });
+      await api("/api/binding/settings", {notifications});
+      if (selected !== "none") await api("/api/binding/notification-test", {});
+      $("bark-key").value = $("serverchan-key").value = "";
+      settingsDirty = false;
+      settingsVersion = "";
+    }, document.querySelector('input[name="push-channel"]:checked')?.value === "none" ? "推送设置已保存" : "推送设置已保存，测试消息已发送", event.submitter, "保存并测试");
+  });
   ["bark", "serverchan"].forEach(channel => {
-    $(`${channel}-clear`).addEventListener("click", () => perform(async () => {
+    $(`${channel}-clear`).addEventListener("click", (event) => perform(async () => {
       await api("/api/binding/settings", {notifications:{[channel]:{clear:true}}});
       $(`${channel}-key`).value = "";
       $(`${channel}-enabled`).checked = false;
       $("push-none").checked = true;
       updatePushChoice();
       $(`${channel}-key`).placeholder = channel === "bark" ? "未配置" : "SCT 或 sctp 开头";
-    }, "推送配置已清除"));
+    }, "推送配置已清除", event.currentTarget, "清除中"));
   });
   $("show-recover").addEventListener("click", () => {
     forceRecover = true;
@@ -764,16 +875,21 @@
   function confirmDelete() {
     return new Promise((resolve) => {
       confirmResolve = resolve;
-      text("confirm-title", "解除领克账号绑定？");
+      text("confirm-title", "解除账号绑定？");
       text("confirm-message", "云端登录状态将被删除，每日任务会停止。");
       $("confirm-dialog").showModal();
     });
   }
   $("binding-settings").addEventListener("click", () => $("binding-settings-dialog").showModal());
   $("binding-settings-cancel").addEventListener("click", () => $("binding-settings-dialog").close());
-  $("binding-replace").addEventListener("click", () => {
-    $("binding-settings-dialog").close();
-    navigate("bind");
+  $("binding-replace").addEventListener("click", (event) => {
+    perform(async () => {
+      await api("/api/capture/reset", {});
+      resetBindingFlow();
+      $("binding-settings-dialog").close();
+      view = "bind";
+      notice("");
+    }, null, event.currentTarget, "准备中");
   });
   $("binding-unbind").addEventListener("click", async () => {
     $("binding-settings-dialog").close();
@@ -782,7 +898,7 @@
         await api("/api/binding/delete", { confirmed: true });
         historyItems = [];
         navigate("overview");
-      }, "已解除绑定");
+      }, "已解除绑定", $("binding-unbind"), "解绑中");
     }
   });
   $("confirm-cancel").addEventListener("click", () => {
@@ -794,14 +910,14 @@
     confirmResolve?.(true);
   });
   $("confirm-dialog").addEventListener("cancel", () => confirmResolve?.(false));
-  $("more-runs").addEventListener("click", () =>
+  $("more-runs").addEventListener("click", (event) =>
     perform(async () => {
       const result = await api("/api/history", { cursor: historyCursor });
       if (!historyItems.length) historyItems = [...state.runs.items];
       historyItems.push(...result.items);
       historyCursor = result.nextCursor;
       runTable("all-runs", historyItems);
-    }),
+    }, null, event.currentTarget, "加载中"),
   );
   $("quit").addEventListener("click", async () => {
     if (state?.proxy.running) {
@@ -847,7 +963,7 @@
     });
     icons();
     if (!token) {
-      notice("请重新双击打开领克助手，以恢复本机连接。");
+      notice("请重新双击打开每日任务助手，以恢复本机连接。");
       return;
     }
     await poll();
@@ -870,6 +986,7 @@
       notice(error.message);
     }
     await perform(() => api("/api/refresh", {}));
+    if (state?.proxy.running) navigate("bind");
     pollTimer = setInterval(() => {
       if (state?.proxy.running) poll();
     }, 2000);

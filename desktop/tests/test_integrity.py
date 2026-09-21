@@ -64,6 +64,15 @@ class IntegrityTests(unittest.TestCase):
             check_integrity()
             verify.assert_not_called()
 
+    def test_proxy_parent_identity_detects_pid_reuse(self):
+        import os
+        import psutil
+        from desktop.launcher import proxy_parent_alive
+        created = psutil.Process(os.getpid()).create_time()
+        self.assertTrue(proxy_parent_alive({'pid': os.getpid(), 'created': created}))
+        self.assertFalse(proxy_parent_alive({'pid': os.getpid(), 'created': created - 1}))
+        self.assertFalse(proxy_parent_alive({'pid': -1, 'created': created}))
+
     def test_packaged_failure_stops_before_proxy_start(self):
         from desktop.launcher import main
         with patch.object(sys, 'frozen', True, create=True), patch.object(sys, 'argv', ['helper', '--proxy']), \

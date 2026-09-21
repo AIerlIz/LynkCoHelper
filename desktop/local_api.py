@@ -22,7 +22,7 @@ def make_server(controller, web_root, api_token, callback_token, port=0):
             self.send_header('Cache-Control', 'no-store')
             self.send_header('X-Content-Type-Options', 'nosniff')
             self.send_header('Referrer-Policy', 'no-referrer')
-            self.send_header('Content-Security-Policy', "default-src 'self'; img-src 'self' data: blob:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+            self.send_header('Content-Security-Policy', "default-src 'self'; img-src 'self' data: blob: https:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
             self.end_headers()
             self.wfile.write(body)
 
@@ -96,7 +96,7 @@ def make_server(controller, web_root, api_token, callback_token, port=0):
                     elif path == '/api/owners':
                         result = controller.register(body.get('inviteCode'))
                     elif path == '/api/claim':
-                        result = controller.claim(body.get('claimUrl'))
+                        result = controller.claim(body.get('claimCode') or body.get('claimUrl'))
                     elif path == '/api/recover':
                         result = controller.register(body.get('recoveryCode'), recover=True)
                     elif path == '/api/refresh':
@@ -109,6 +109,8 @@ def make_server(controller, web_root, api_token, callback_token, port=0):
                         result = controller.activate(body)
                     elif path == '/api/binding/settings':
                         result = controller.settings(body)
+                    elif path == '/api/binding/notification-test':
+                        result = controller.test_notification()
                     elif path == '/api/binding/run':
                         result = controller.run()
                     elif path == '/api/binding/delete':
@@ -128,6 +130,8 @@ def make_server(controller, web_root, api_token, callback_token, port=0):
                             controller.generation += 1
                             controller.stage = 'waiting'
                             controller.capture_events = []
+                    elif path == '/api/capture/reset':
+                        result = controller.reset_capture()
                     elif path == '/api/capture/stop':
                         if body.get('proxyRemoved') is not True:
                             raise ValueError('请先关闭手机 Wi-Fi 代理')

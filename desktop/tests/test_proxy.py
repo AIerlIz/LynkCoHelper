@@ -2,9 +2,10 @@ import json
 import tempfile
 import unittest
 import socket
+import os
 from types import SimpleNamespace
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
@@ -12,6 +13,28 @@ from desktop.proxy import ProxyManager, network_addresses
 
 
 class ProxyLifecycleTests(unittest.TestCase):
+    def test_proxy_child_receives_parent_process_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ports = []
+            for _ in range(2):
+                with socket.socket() as probe:
+                    probe.bind(('127.0.0.1', 0))
+                    ports.append(probe.getsockname()[1])
+            (Path(directory) / 'ports.json').write_text(json.dumps({'proxy': ports[0], 'certificate': ports[1]}))
+            manager = ProxyManager(directory, 'http://127.0.0.1:1/internal/capture', 'fixture')
+            child = MagicMock()
+            child.poll.return_value = None
+            with patch('desktop.proxy.network_addresses', return_value=[{'name':'fixture','address':'127.0.0.1'}]), \
+                    patch('desktop.proxy.subprocess.Popen', return_value=child) as launch, \
+                    patch('desktop.proxy.socket.create_connection', return_value=MagicMock()):
+                manager.start('127.0.0.1', 'IOS')
+            try:
+                parent = json.loads(launch.call_args.kwargs['env']['LYNKCO_PROXY_PARENT'])
+                self.assertEqual(parent['pid'], os.getpid())
+                self.assertGreater(parent['created'], 0)
+            finally:
+                manager.stop()
+
     def test_fixed_ports_do_not_fall_back_when_occupied(self):
         with tempfile.TemporaryDirectory() as directory, socket.socket() as occupied:
             occupied.bind(('127.0.0.1', 0))
@@ -42,6 +65,10 @@ class ProxyLifecycleTests(unittest.TestCase):
                 self.assertFalse(manager.accepts_peer('127.0.0.1'))
                 with urlopen(state['pairUrl'], timeout=3) as response:
                     self.assertEqual(response.status, 200)
+                    pairing_page = response.read().decode('utf-8')
+                self.assertIn('已安装并信任过本机证书，无需重复安装', pairing_page)
+                self.assertNotIn('移除本次证书', pairing_page)
+                self.assertNotIn('领克', pairing_page)
                 self.assertTrue(manager.accepts_peer('127.0.0.1'))
                 with urlopen(state['pairUrl'] + '/certificate.cer', timeout=3) as response:
                     certificate = response.read()

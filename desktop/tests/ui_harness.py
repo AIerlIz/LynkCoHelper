@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from desktop.binding import Controller
 from desktop.local_api import make_server
+import desktop.proxy
 
 
 class Store:
@@ -45,14 +46,14 @@ class Cloud:
         if path == '/v1/binding-candidates':
             mode = Path('/tmp/lynkco-ui-test-mode').read_text().strip() if Path('/tmp/lynkco-ui-test-mode').exists() else ''
             return {'id': 'fixture-candidate', 'expiresAt': (time.time() + (-1 if mode == 'expired' else 600)) * 1000,
-                    'preview': {'verified': True, 'displayName': '测试领克账号'}, 'capabilities': {'share': True}}
+                    'preview': {'verified': True, 'displayName': '测试账号'}, 'capabilities': {'share': True}}
         if path.endswith('/activate'):
             mode = Path('/tmp/lynkco-ui-test-mode').read_text().strip() if Path('/tmp/lynkco-ui-test-mode').exists() else ''
             if mode == 'activation-failure':
                 raise ValueError('云端暂时不可用，请稍后重试')
             self.binding = {'id': 'fixture-binding', 'label': body['label'], 'status': 'active', 'scheduleTime': body.get('scheduleTime', '08:00-10:00'),
                             'doShare': body['doShare'], 'canShare': True, 'nextRunAt': time.time() * 1000 + 3600000,
-                            'inventory': {'cards': 12, 'days': 16}}
+                            'inventory': {'points': '780', 'cards': 12, 'energy': 18, 'days': 16}}
             return self.binding
         if path.startswith('/v1/binding/runs'):
             if method == 'POST':
@@ -62,6 +63,8 @@ class Cloud:
                               'shareStatus': 'skipped', 'message': None, 'errorCode': None}]
                 return {'id': 'fixture-run', 'status': 'completed'}
             return {'items': self.runs, 'nextCursor': None}
+        if path == '/v1/binding/notifications/test':
+            return {'sent': True, 'channel': next((name for name, config in self.binding.get('notifications', {}).items() if config.get('enabled')), None)}
         if path == '/v1/binding':
             if method == 'PATCH':
                 settings = {k:v for k,v in body.items() if k != 'notifications'}

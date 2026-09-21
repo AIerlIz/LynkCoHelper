@@ -45,10 +45,41 @@ class LocalAPITests(unittest.TestCase):
         self.assertEqual(self.request('/api/status', token='')[0], 401)
         self.assertEqual(self.request('/api/status')[0], 200)
 
+    def test_static_resources_are_never_cached(self):
+        client = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=2)
+        for path in ('/', '/app.js', '/style.css'):
+            client.request('GET', path)
+            response = client.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.getheader('Cache-Control'), 'no-store')
+            self.assertIn("img-src 'self' data: blob: https:", response.getheader('Content-Security-Policy'))
+            response.read()
+        client.close()
+
     def test_claim_link_route_adopts_cloud_identity(self):
         status, body = self.request('/api/claim', body={'claimUrl': 'https://lynkco.ltools.asia/claim/claim-token_123456'})
         self.assertEqual(status, 200)
         self.assertTrue(json.loads(body)['data']['saved'])
+
+    def test_claim_route_accepts_invitation_code(self):
+        status, body = self.request('/api/claim', body={'claimCode': 'claim-token_123456'})
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)['data']['saved'])
+
+    def test_capture_reset_route_clears_stale_replacement_state(self):
+        self.controller.claim('claim-token_123456')
+        self.controller.receive_capture(SESSION)
+        status, body = self.request('/api/capture/reset', body={})
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)['data']['reset'])
+        self.assertEqual(self.controller.public_state()['capture']['stage'], 'idle')
+
+    def test_notification_test_route_calls_cloud(self):
+        self.controller.claim('claim-token_123456')
+        status, body = self.request('/api/binding/notification-test', body={})
+        self.assertEqual(status, 200)
+        self.assertIsNone(json.loads(body)['data'])
+        self.assertIn(('POST', '/v1/binding/notifications/test', {}), self.controller.cloud.calls)
 
     def test_startup_never_uses_reverse_dns(self):
         from desktop.local_api import make_server

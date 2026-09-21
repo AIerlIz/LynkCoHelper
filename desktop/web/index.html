@@ -9,7 +9,7 @@
     <script defer src="/lucide.js"></script>
     <script defer src="/app.js"></script>
   </head>
-  <body>
+  <body data-ui-version="user-dashboard-v2">
     <main>
       <div id="notice" class="notice" role="status" hidden></div>
       <h1 id="page-title" hidden>概览</h1>
@@ -19,25 +19,25 @@
           <i data-lucide="cloud"></i>
           <div>
             <h2>连接云端账号</h2>
-            <p class="muted">首次使用打开管理员发来的领取链接；更换电脑使用恢复码。</p>
+            <p class="muted">首次使用输入管理员发来的邀请码；更换电脑使用恢复码。</p>
           </div>
         </div>
         <form id="identity-form" class="narrow form-stack">
           <div class="segmented" role="group" aria-label="连接方式">
             <button type="button" data-identity="claim" class="selected">
-              领取链接</button
+              邀请码</button
             ><button type="button" data-identity="recover">恢复账号</button>
           </div>
           <label
-            ><span id="identity-label">领取链接</span
+            ><span id="identity-label">邀请码</span
             ><input
               id="identity-code"
               required
               autocomplete="off"
               spellcheck="false"
-              placeholder="粘贴管理员发来的领取链接"
+              placeholder="粘贴管理员发来的邀请码"
           /></label>
-          <p id="identity-help" class="muted">打开管理员发来的链接，复制地址栏中的完整链接粘贴到这里。</p>
+          <p id="identity-help" class="muted">粘贴管理员发来的邀请码；旧版完整领取链接也可以继续使用。</p>
           <button class="primary" type="submit">
             <i data-lucide="arrow-right"></i
             ><span id="identity-submit">连接云端</span>
@@ -64,13 +64,12 @@
           </div>
           <div class="metrics">
             <div class="asset-metric"><p><i data-lucide="wallet-cards"></i>当前资产</p><div class="asset-values"><span><strong id="points">--</strong><small>积分</small></span><b></b><span><strong id="sign-cards">暂无</strong><small>签到卡</small></span><b></b><span><strong id="energy">暂无</strong><small>能量体</small></span></div><span>最近查询 <b id="asset-updated">--</b></span></div>
-            <div class="continue-metric"><p><i data-lucide="flame"></i>连续签到</p><strong id="continue-days">暂无</strong><span>连续任务天数</span></div>
           </div>
           <div class="two-columns">
             <section class="today-section">
               <div class="section-header"><div><h2>今日任务</h2><p id="today-date" class="eyebrow"></p></div><span id="today-status" class="badge"><i></i>等待执行</span></div>
-              <div class="task-line"><span class="task-symbol"><i data-lucide="calendar-check-2"></i></span><div><strong>每日签到</strong><small id="sign-task-detail">每天执行一次</small></div><span id="sign-task-reward" class="task-reward">--</span><i data-lucide="check"></i></div>
-              <div class="task-line"><span class="task-symbol energy"><i data-lucide="share-2"></i></span><div><strong>每日分享</strong><small id="share-task-detail">签到时同时完成分享</small></div><span id="share-task-reward" class="task-reward energy-text">--</span><i data-lucide="check"></i></div>
+              <div class="task-line"><span class="task-symbol"><i data-lucide="calendar-check-2"></i></span><div><strong>每日签到</strong><small id="sign-task-detail">每天执行一次</small></div><span id="sign-task-reward" class="task-reward">--</span><i id="sign-task-icon" class="task-state-icon pending" data-lucide="clock-3"></i></div>
+              <div class="task-line"><span class="task-symbol energy"><i data-lucide="share-2"></i></span><div><strong>每日分享</strong><small id="share-task-detail">签到时同时完成分享</small></div><span id="share-task-reward" class="task-reward energy-text">--</span><i id="share-task-icon" class="task-state-icon disabled" data-lucide="minus"></i></div>
               <div class="next-run"><i data-lucide="clock-3"></i><span id="next-run-label">下一次执行：--</span></div>
             </section>
             <section class="settings-section">
@@ -86,7 +85,7 @@
           </div>
           <section class="push-section" aria-labelledby="push-title">
             <div><h2 id="push-title">结果推送</h2><p>每次任务完成后发送一次结果通知</p></div>
-            <div><div class="push-options" role="radiogroup" aria-label="推送方式"><label><input id="push-none" name="push-channel" value="none" type="radio" checked />不推送</label><label><input id="bark-enabled" name="push-channel" value="bark" type="radio" />Bark</label><label><input id="serverchan-enabled" name="push-channel" value="serverchan" type="radio" />Server 酱</label></div><div id="push-fields" class="push-fields"><label>Bark Device Key<input id="bark-key" type="password" autocomplete="new-password" maxlength="256" placeholder="未配置" /></label><button id="bark-clear" type="button" title="清除 Bark 配置" aria-label="清除 Bark 配置"><i data-lucide="trash-2"></i></button><label>Server 酱 SendKey<input id="serverchan-key" type="password" autocomplete="new-password" maxlength="256" placeholder="SCT 或 sctp 开头" /></label><button id="serverchan-clear" type="button" title="清除 Server 酱 配置" aria-label="清除 Server 酱 配置"><i data-lucide="trash-2"></i></button></div><p class="muted">保存设置时会立即发送一条测试消息。</p></div>
+            <form id="push-form"><div class="push-options" role="radiogroup" aria-label="推送方式"><label><input id="push-none" name="push-channel" value="none" type="radio" checked />不推送</label><label><input id="bark-enabled" name="push-channel" value="bark" type="radio" />Bark</label><label><input id="serverchan-enabled" name="push-channel" value="serverchan" type="radio" />Server 酱</label></div><div id="push-fields" class="push-fields"><div id="bark-field" class="push-channel-field"><label>Bark Device Key<input id="bark-key" type="password" autocomplete="new-password" maxlength="256" placeholder="未配置" /></label><button id="bark-clear" type="button" title="清除 Bark 配置" aria-label="清除 Bark 配置"><i data-lucide="trash-2"></i></button></div><div id="serverchan-field" class="push-channel-field"><label>Server 酱 SendKey<input id="serverchan-key" type="password" autocomplete="new-password" maxlength="256" placeholder="SCT 或 sctp 开头" /></label><button id="serverchan-clear" type="button" title="清除 Server 酱配置" aria-label="清除 Server 酱配置"><i data-lucide="trash-2"></i></button></div></div><div class="push-footer"><p class="muted">选择渠道后，保存时会立即发送一条测试消息。</p><button id="push-save" type="submit" class="primary"><i data-lucide="send"></i><span id="push-save-label">保存设置</span></button></div></form>
           </section>
           <section class="recent-section" aria-labelledby="recent-title"><div class="section-heading spaced"><div><h2 id="recent-title">最近运行</h2><p class="muted">展示最近 7 次云端任务结果</p></div><button class="text-button" data-go-history>查看全部<i data-lucide="arrow-right"></i></button></div><div id="recent-runs"></div></section>
           <div hidden><span id="next-run"></span><span id="last-result"></span><span id="last-run-date"></span></div>
@@ -97,12 +96,12 @@
         </div>
       </section>
       <section id="view-bind" class="view" hidden>
-        <ol class="steps" aria-label="绑定进度">
-          <li data-step="0"><span>1</span>配对</li>
-          <li data-step="1"><span>2</span>配置代理</li>
-          <li data-step="2"><span>3</span>抓包并验证</li>
-          <li data-step="3"><span>4</span>保存到云端</li>
-          <li data-step="4"><span>5</span>关闭代理并断开</li>
+        <ol class="steps" aria-label="绑定阶段">
+          <li><button type="button" data-binding-step="0"><span>1</span>配对</button></li>
+          <li><button type="button" data-binding-step="1"><span>2</span>配置代理</button></li>
+          <li><button type="button" data-binding-step="2"><span>3</span>抓包并验证</button></li>
+          <li><button type="button" data-binding-step="3"><span>4</span>保存到云端</button></li>
+          <li><button type="button" data-binding-step="4"><span>5</span>关闭代理并断开</button></li>
         </ol>
         <div id="bind-start">
           <h2>连接你的手机</h2>
@@ -125,9 +124,10 @@
                 <option value="">正在读取网络...</option>
               </select></label
             >
-            <button type="submit" class="primary">
-              <i data-lucide="wifi"></i>开始连接
-            </button>
+            <div class="binding-step-actions">
+              <button id="bind-back" type="button" hidden><i data-lucide="arrow-left"></i>返回概览</button>
+              <button type="submit" class="primary"><i data-lucide="wifi"></i>开始连接</button>
+            </div>
           </form>
         </div>
         <div id="bind-connect" hidden>
@@ -177,17 +177,17 @@
                   </button>
                 </div>
               </div>
-              <button id="proxy-next" class="primary"><i data-lucide="arrow-right"></i>已配置，开始抓包</button>
+              <div class="binding-step-actions"><button id="proxy-next" class="primary"><i data-lucide="arrow-right"></i>已配置，开始抓包</button></div>
           </div>
           <div id="capture-step" hidden>
-          <h2>打开领克 App，抓包并验证</h2>
+          <h2>打开手机 App，抓包并验证</h2>
           <p id="traffic-status" class="status"></p>
           <div id="capture-wait" class="capture-status">
             <span class="pulse"></span>
             <div>
               <h3>等待完整登录状态</h3>
               <p>
-                等待领克 App 发起登录或续期请求。
+                等待手机 App 发起登录或续期请求。
               </p>
             </div>
           </div>
@@ -204,9 +204,8 @@
                 id="upload-consent"
                 type="checkbox"
               />我同意将本次登录状态上传到云端</label
-            ><button id="prepare" class="primary">
-              <i data-lucide="shield-check"></i>验证账号
-            </button>
+            >
+            <p id="auto-verify-status" class="muted">勾选后会静默验证个人信息，无需再次点击。</p>
           </div>
           </div>
         </div>
@@ -254,15 +253,13 @@
             无”。
           </p>
         </div>
-        <button id="cancel-capture" hidden><i data-lucide="x"></i>放弃本次绑定</button>
-        <button id="continue-capture" hidden><i data-lucide="arrow-left"></i>返回继续抓包</button>
         <div id="disconnect-panel" class="disconnect" hidden>
-          <label class="check-label"
-            ><input id="proxy-removed" type="checkbox" />我已关闭手机 Wi-Fi
-            代理</label
-          ><button id="stop-proxy">
-            <i data-lucide="unplug"></i>断开手机连接
-          </button>
+          <div class="binding-step-actions"><label class="check-label"
+              ><input id="proxy-removed" type="checkbox" />我已关闭手机 Wi-Fi
+              代理</label
+            ><button id="stop-proxy">
+              <i data-lucide="unplug"></i>断开手机连接
+            </button></div>
           <p class="muted">
             关闭浏览器不会停止代理。退出助手前，请先完成此步骤。
           </p>

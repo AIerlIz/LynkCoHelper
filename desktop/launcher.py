@@ -11,6 +11,37 @@ import sys
 import threading
 import webbrowser
 from pathlib import Path
+import psutil
+
+
+def proxy_parent_alive(record):
+    try:
+        pid = record['pid']
+        created = record['created']
+        if type(pid) is not int or pid <= 0 or not isinstance(created, (int, float)):
+            return False
+        return psutil.Process(pid).create_time() == created
+    except (KeyError, TypeError, psutil.NoSuchProcess):
+        return False
+    except psutil.AccessDenied:
+        return True
+
+
+def watch_proxy_parent(raw):
+    if not raw:
+        return
+    try:
+        record = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        raise SystemExit('Invalid proxy parent identity') from None
+
+    def watch():
+        import time
+        while proxy_parent_alive(record):
+            time.sleep(.5)
+        os._exit(0)
+
+    threading.Thread(target=watch, daemon=True).start()
 
 
 def state_directory():
@@ -80,6 +111,7 @@ def open_user_page(url):
 def main():
     check_integrity()
     if '--proxy' in sys.argv:
+        watch_proxy_parent(os.environ.get('LYNKCO_PROXY_PARENT'))
         from mitmproxy.tools.main import mitmdump
         position = sys.argv.index('--proxy')
         mitmdump(sys.argv[position + 1:])
@@ -90,6 +122,7 @@ def main():
     parser.add_argument('--state-dir', type=Path)
     parser.add_argument('--bootstrap-parent')
     parser.add_argument('--bootstrap-stop', type=Path)
+    parser.add_argument('--release-sha')
     options = parser.parse_args()
     import desktop
     package_root = Path(desktop.__file__).parent
@@ -120,7 +153,12 @@ def main():
     base = 'http://127.0.0.1:' + str(server.server_port)
     controller.proxy = ProxyManager(root, base + '/internal/capture', callback_token)
     url = base + '/#' + token
-    instance_path.write_text(json.dumps({'pid': os.getpid(), 'url': url, 'port': server.server_port}))
+    instance_path.write_text(json.dumps({
+        'pid': os.getpid(),
+        'url': url,
+        'port': server.server_port,
+        'releaseSha': options.release_sha,
+    }))
     instance_path.chmod(0o600)
 
     def cleanup():

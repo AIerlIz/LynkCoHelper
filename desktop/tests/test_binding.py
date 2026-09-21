@@ -59,6 +59,12 @@ class BindingTests(unittest.TestCase):
         self.assertTrue(result['saved'])
         self.assertIn(('POST', '/v1/claim/claim-token_123456', {}), self.cloud.calls)
 
+    def test_claim_accepts_invitation_code_without_full_link(self):
+        controller = __import__('desktop.binding', fromlist=['Controller']).Controller(self.cloud, MemoryStore())
+        result = controller.claim('claim-token_123456')
+        self.assertTrue(result['saved'])
+        self.assertIn(('POST', '/v1/claim/claim-token_123456', {}), self.cloud.calls)
+
     def test_claim_link_rejects_other_hosts(self):
         controller = __import__('desktop.binding', fromlist=['Controller']).Controller(self.cloud, MemoryStore())
         with self.assertRaisesRegex(ValueError, '不是本助手的云端链接'):
@@ -151,6 +157,20 @@ class BindingTests(unittest.TestCase):
             self.controller.activate(dict(label='car', scheduleTime='08:10', doShare=False))
         self.assertEqual(self.controller.public_state()['capture']['stage'], 'verified')
         self.assertIsNone(self.controller.public_state()['binding'])
+
+    def test_reset_capture_returns_replacement_flow_to_first_step(self):
+        self.controller.receive_capture(SESSION)
+        self.controller.prepare()
+        self.controller.reset_capture()
+        capture = self.controller.public_state()['capture']
+        self.assertEqual(capture['stage'], 'idle')
+        self.assertIsNone(self.controller.public_state()['candidate'])
+        self.assertEqual(capture['events'], [])
+
+    def test_notification_test_is_forwarded_to_cloud(self):
+        result = self.controller.test_notification()
+        self.assertIsNone(result)
+        self.assertIn(('POST', '/v1/binding/notifications/test', {}), self.cloud.calls)
 
 
 if __name__ == '__main__':

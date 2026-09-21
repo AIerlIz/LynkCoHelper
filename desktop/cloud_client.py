@@ -7,7 +7,7 @@ import time
 import uuid
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -28,6 +28,8 @@ class CloudClient:
             raise ValueError('云端地址必须是 HTTPS 服务地址')
         self.base_url = base_url.rstrip('/')
         self.opener = build_opener(NoRedirect())
+        self.direct_opener = build_opener(ProxyHandler({}), NoRedirect())
+        self.loopback = parsed.hostname in {'127.0.0.1', 'localhost'}
         self.keys = {}
         self.lock = threading.Lock()
 
@@ -47,10 +49,18 @@ class CloudClient:
                 headers['Idempotency-Key'] = self.keys.setdefault(digest, (str(uuid.uuid4()), now))[0]
         request = Request(self.base_url + path, data=data, headers=headers, method=method)
         try:
+            timeout = 150 if method == 'POST' and path == '/v1/binding/runs' else 40
             try:
-                response = self.opener.open(request, timeout=150 if method == 'POST' and path == '/v1/binding/runs' else 40)
+                response = self.opener.open(request, timeout=timeout)
             except HTTPError as error:
                 response = error
+            except (URLError, OSError, TimeoutError):
+                if self.loopback:
+                    raise
+                try:
+                    response = self.direct_opener.open(request, timeout=timeout)
+                except HTTPError as error:
+                    response = error
             with response:
                 payload = response.read(262145)
                 if len(payload) > 262144:
@@ -74,13 +84,15 @@ class CloudClient:
                 'SERVICE_NOT_CONFIGURED': '云端尚未完成配置，请联系维护者',
                 'APP_CONFIG_UNAVAILABLE': '云端应用配置需要维护，请联系维护者',
                 'CAPTURE_INCOMPLETE': '登录状态不完整，请重新连接手机获取',
-                'UPSTREAM_UNAVAILABLE': '领克服务暂时无法连接，请稍后重试',
+                'UPSTREAM_UNAVAILABLE': '上游服务暂时无法连接，请稍后重试',
                 'BINDING_PAUSED': '请先恢复每日任务再执行',
                 'QUOTA_REACHED': '试用名额已满，请联系维护者',
                 'BATCH_FULL': '领取批次已领完或已过期，请联系管理员获取新链接',
                 'SLOT_FULL': '该执行区间名额已满，请选择其他区间',
                 'SHARE_UNAVAILABLE': '本次设备信息不支持分享，请关闭分享后重试',
                 'NOTIFICATION_CONFLICT': 'Bark 和 Server 酱只能选择一个',
+                'NOTIFICATION_NOT_CONFIGURED': '请先选择并保存一个推送渠道',
+                'NOTIFICATION_TEST_FAILED': '配置已保存，但测试消息发送失败，请检查密钥',
                 'SERVICE_UNAVAILABLE': '云端服务暂时不可用，请稍后重试',
                 'CONFLICT': '状态正在更新，请刷新后重试',
                 'NOT_FOUND': '记录不存在或已过期，请刷新后重试',

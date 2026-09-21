@@ -64,13 +64,49 @@ button svg {
   flex-shrink: 0;
 }
 .primary {
-  background: var(--green);
-  border-color: var(--green);
+  background: #20252b;
+  border-color: #20252b;
   color: white;
 }
 .primary:hover {
-  background: #105e4e;
+  background: #343b43;
   color: white;
+}
+button.is-loading {
+  position: relative;
+  color: transparent !important;
+  opacity: 1 !important;
+}
+button.is-loading > * {
+  visibility: hidden;
+}
+button.is-loading::after {
+  content: attr(data-loading-label);
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: inherit;
+  color: #20252b;
+  white-space: nowrap;
+}
+button.primary.is-loading::after {
+  color: #fff;
+}
+button.icon-button.is-loading::after {
+  content: "";
+  width: 14px;
+  height: 14px;
+  inset: 0;
+  margin: auto;
+  padding: 0;
+  border: 2px solid #aeb6bd;
+  border-top-color: #20252b;
+  border-radius: 50%;
+  animation: button-spin .7s linear infinite;
+}
+@keyframes button-spin {
+  to { transform: rotate(360deg); }
 }
 .danger {
   color: var(--red);
@@ -461,12 +497,21 @@ legend {
   gap: 12px;
 }
 .steps li {
-  display: flex;
-  align-items: center;
-  gap: 10px;
   color: #869087;
   font-size: 12px;
 }
+.steps button {
+  width: 100%;
+  min-height: 36px;
+  justify-content: flex-start;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+}
+.steps button:hover:not(:disabled) { background: transparent; color: var(--green); }
+.steps button:disabled { opacity: .45; }
 .steps li span {
   display: inline-flex;
   width: 26px;
@@ -591,6 +636,16 @@ legend {
   margin-top: 36px;
   padding-top: 20px;
   border-top: 1px solid var(--line);
+}
+.binding-step-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 20px;
+}
+.binding-step-actions button {
+  min-width: 150px;
 }
 .disconnect p {
   font-size: 12px;
@@ -796,7 +851,7 @@ main { margin: 0 auto; width: 100%; max-width: 1340px; padding: 37px 40px 22px; 
   padding: 20px 0;
   border: 1px solid var(--line);
   border-radius: 7px;
-  background: #fff;
+  background: #f6f7f8;
 }
 .metrics > div { padding: 0 22px; border-left: 1px solid var(--line); }
 .metrics > div:first-child { padding-left: 22px; border-left: 0; }
@@ -1066,12 +1121,11 @@ main { margin: 0 auto; width: 100%; max-width: 1340px; padding: 37px 40px 22px; 
 }
 
 /* Confirmed user dashboard layout. Keep daily tasks and settings visible together. */
+#view-overview { border-top: 0; padding-top: 0; }
 .account-strip { border-top: 0; padding-top: 14px; }
 .account-meta { display: flex; align-items: center; gap: 12px; }
 .account-meta span + span { border-left: 1px solid var(--line); padding-left: 12px; }
-.metrics { grid-template-columns: minmax(0, 1.35fr) minmax(220px, 1fr); margin-bottom: 30px; }
-.continue-metric { min-height: 102px; }
-.continue-metric strong { display: block; font-size: 31px; line-height: 1.2; }
+.metrics { grid-template-columns: minmax(0, 1fr); margin-bottom: 30px; }
 .metrics > div > span { display: block; color: var(--muted); font-size: 11px; margin-top: 9px; }
 .asset-metric > span { margin-top: 10px; }
 .asset-metric > span b { color: var(--muted); font-weight: 400; }
@@ -1089,7 +1143,11 @@ main { margin: 0 auto; width: 100%; max-width: 1340px; padding: 37px 40px 22px; 
 .task-line small { display: block; color: var(--muted); font-size: 10px; margin-top: 5px; }
 .task-line .task-reward { margin-left: auto; font-size: 12px; color: #5d704e; white-space: nowrap; }
 .task-line .energy-text { color: #b17c51; }
-.task-line > svg { width: 16px; color: #92ad70; margin-left: 5px; }
+.task-line > svg { width: 16px; margin-left: 5px; }
+.task-state-icon.pending, .task-state-icon.disabled { color: #9ca5a1; }
+.task-state-icon.success { color: #78a856; }
+.task-state-icon.error { color: var(--red); }
+.task-state-icon.running, .task-state-icon.warning { color: #b17c51; }
 .next-run { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--muted); margin-top: 16px; }
 .next-run svg { width: 13px; height: 13px; }
 .settings-section .schedule-form { display: grid; gap: 17px; }
@@ -1115,10 +1173,14 @@ main { margin: 0 auto; width: 100%; max-width: 1340px; padding: 37px 40px 22px; 
 .push-options input { position: absolute; opacity: 0; width: 1px; height: 1px; min-height: 0; padding: 0; }
 .push-options label:has(input:checked) { background: #fff; border-color: #e3e6e9; color: #303940; box-shadow: 0 1px 2px #00000005; }
 .push-options label:focus-within { outline: 2px solid #9ac574; }
-.push-fields { display: grid; grid-template-columns: minmax(0, 1fr) 40px; gap: 8px 10px; max-width: 520px; margin-top: 12px; }
+.push-fields { max-width: 520px; margin-top: 12px; }
+.push-channel-field { display: grid; grid-template-columns: minmax(0, 1fr) 40px; gap: 10px; align-items: end; }
 .push-fields label { display: grid; gap: 6px; font-size: 10px; color: var(--muted); }
 .push-fields input { min-height: 36px; font-size: 12px; }
 .push-fields button { width: 40px; height: 36px; min-height: 36px; padding: 0; }
+.push-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; max-width: 520px; margin-top: 12px; }
+.push-footer p { margin: 0; }
+.push-footer button { min-height: 36px; font-size: 11px; }
 .recent-section { border-top: 0; padding: 0; }
 .recent-section .section-heading { margin-top: 0; }
 .recent-section .section-heading.spaced { padding-top: 0; border-top: 0; }
@@ -1130,14 +1192,18 @@ main { margin: 0 auto; width: 100%; max-width: 1340px; padding: 37px 40px 22px; 
   .today-section { padding-right: 0 !important; border-right: 0 !important; }
   .push-section { grid-template-columns: 1fr; gap: 14px; }
 }
+@media (max-width: 1050px) and (min-width: 721px) {
+  main { margin: 0 auto; width: 100%; }
+}
 @media (max-width: 720px) {
   .metrics { grid-template-columns: 1fr; }
   .metrics > div { border-left: 0; padding: 16px 18px; }
-  .continue-metric { border-top: 1px solid var(--line) !important; }
+  .metrics > div:last-child { grid-column: auto; border-top: 0; padding: 16px 18px; }
   .form-footer { align-items: flex-start; flex-direction: column; }
   .form-footer > span { max-width: none; }
   .form-actions { width: 100%; flex-wrap: wrap; }
   .form-actions button { flex: 1 1 auto; }
   .push-options { width: 100%; }
   .push-options label { flex: 1; min-width: 0; }
+  .binding-step-actions { align-items: center; }
 }

@@ -10,7 +10,17 @@ import sys
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from desktop.bootstrap import cleanup_stale, download, extract, main
+from desktop.bootstrap import (
+    ExistingInstanceBusy,
+    ProgressUI,
+    cached_archive,
+    cleanup_stale,
+    download,
+    existing_instance_url,
+    extract,
+    main,
+    wait_for_child,
+)
 
 
 class BootstrapTests(unittest.TestCase):
@@ -39,6 +49,24 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(path.read_bytes(), b'test')
         if os.name != 'nt':
             self.assertTrue(path.stat().st_mode & 0o100)
+
+    def test_wait_for_child_keeps_graphical_progress_responsive(self):
+        child = unittest.mock.Mock()
+        child.wait.side_effect = [__import__('subprocess').TimeoutExpired('client', .1), 0]
+        ui = unittest.mock.Mock()
+
+        self.assertEqual(wait_for_child(child, ui), 0)
+
+        ui.pump.assert_called_once_with()
+
+    def test_progress_window_close_requests_clean_shutdown(self):
+        ui = ProgressUI.__new__(ProgressUI)
+        ui.root = unittest.mock.Mock()
+        ui.cancelled = False
+        ui.request_close()
+
+        with self.assertRaises(KeyboardInterrupt):
+            ui.pump()
 
     def test_path_traversal_and_external_symlink_rejected(self):
         for name, link in [('../outside', None), ('escape', '../../outside')]:
@@ -69,22 +97,142 @@ class BootstrapTests(unittest.TestCase):
         self.assertTrue((self.root / 'session-recent').exists())
         self.assertFalse((self.root / 'session-dead').exists())
 
+    def test_cached_archive_downloads_once_and_reuses_verified_content(self):
+        payload = b'verified release archive'
+        expected = hashlib.sha256(payload).hexdigest()
+        calls = []
+
+        def fetch(url, destination, digest, ui=None):
+            calls.append(url)
+            self.assertEqual(digest, expected)
+            destination.write_bytes(payload)
+
+        with patch('desktop.bootstrap.download', side_effect=fetch):
+            first = cached_archive(self.root, 'https://github.com/example/asset', expected)
+            second = cached_archive(self.root, 'https://github.com/example/asset', expected)
+
+        self.assertEqual(first, second)
+        self.assertEqual(first.read_bytes(), payload)
+        self.assertEqual(calls, ['https://github.com/example/asset'])
+
+    def test_cached_archive_replaces_corrupt_content(self):
+        payload = b'fresh release archive'
+        expected = hashlib.sha256(payload).hexdigest()
+        cache = self.root / 'cache' / f'{expected}.tar.gz'
+        cache.parent.mkdir()
+        cache.write_bytes(b'corrupt')
+
+        def fetch(url, destination, digest, ui=None):
+            destination.write_bytes(payload)
+
+        with patch('desktop.bootstrap.download', side_effect=fetch) as mocked:
+            result = cached_archive(self.root, 'https://github.com/example/asset', expected)
+
+        mocked.assert_called_once()
+        self.assertEqual(result.read_bytes(), payload)
+
+    def test_cached_archive_removes_other_release_archives(self):
+        payload = b'current release archive'
+        expected = hashlib.sha256(payload).hexdigest()
+        cache = self.root / 'cache'
+        cache.mkdir()
+        current = cache / f'{expected}.tar.gz'
+        current.write_bytes(payload)
+        old = cache / f'{"a" * 64}.tar.gz'
+        old.write_bytes(b'old release')
+        unrelated = cache / 'notes.txt'
+        unrelated.write_text('keep')
+
+        self.assertEqual(cached_archive(self.root, 'https://github.com/example/asset', expected), current)
+
+        self.assertFalse(old.exists())
+        self.assertTrue(unrelated.exists())
+
+    def test_existing_instance_is_verified_before_it_is_reused(self):
+        instance = self.root / 'instance.json'
+        url = 'http://127.0.0.1:54321/#local-token'
+        instance.write_text(json.dumps({'pid': os.getpid(), 'url': url, 'port': 54321}))
+        response = io.BytesIO(b'{"ok":true,"data":{}}')
+
+        with patch('desktop.bootstrap.build_opener') as opener:
+            opener.return_value.open.return_value = response
+            self.assertEqual(existing_instance_url(self.root), url)
+            request = opener.return_value.open.call_args.args[0]
+
+        self.assertEqual(request.full_url, 'http://127.0.0.1:54321/api/status')
+        self.assertEqual(request.get_header('Authorization'), 'Bearer local-token')
+
+    def test_same_release_instance_is_reused_without_quitting(self):
+        url = 'http://127.0.0.1:54321/#local-token'
+        (self.root / 'instance.json').write_text(json.dumps({
+            'pid': os.getpid(), 'url': url, 'port': 54321, 'releaseSha': 'a' * 64,
+        }))
+        with patch('desktop.bootstrap.build_opener') as opener:
+            opener.return_value.open.return_value = io.BytesIO(b'{"ok":true,"data":{"proxy":{"running":false}}}')
+            self.assertEqual(existing_instance_url(self.root, 'a' * 64), url)
+        self.assertEqual(opener.return_value.open.call_count, 1)
+
+    def test_old_release_instance_is_quit_before_starting_the_new_release(self):
+        url = 'http://127.0.0.1:54321/#local-token'
+        (self.root / 'instance.json').write_text(json.dumps({
+            'pid': 54321, 'url': url, 'port': 54321, 'releaseSha': 'a' * 64,
+        }))
+        responses = [
+            io.BytesIO(b'{"ok":true,"data":{"proxy":{"running":false}}}'),
+            io.BytesIO(b'{"ok":true,"data":{"stopped":true}}'),
+        ]
+        with patch('desktop.bootstrap.psutil.pid_exists', side_effect=[True, False]), \
+                patch('desktop.bootstrap.build_opener') as opener:
+            opener.return_value.open.side_effect = responses
+            self.assertIsNone(existing_instance_url(self.root, 'b' * 64))
+            quit_request = opener.return_value.open.call_args_list[1].args[0]
+        self.assertEqual(quit_request.full_url, 'http://127.0.0.1:54321/api/quit')
+        self.assertEqual(quit_request.method, 'POST')
+
+    def test_old_release_is_preserved_while_phone_proxy_is_running(self):
+        url = 'http://127.0.0.1:54321/#local-token'
+        (self.root / 'instance.json').write_text(json.dumps({
+            'pid': os.getpid(), 'url': url, 'port': 54321, 'releaseSha': 'a' * 64,
+        }))
+        with patch('desktop.bootstrap.build_opener') as opener:
+            opener.return_value.open.return_value = io.BytesIO(
+                b'{"ok":true,"data":{"proxy":{"running":true}}}'
+            )
+            with self.assertRaisesRegex(ExistingInstanceBusy, '手机代理') as raised:
+                existing_instance_url(self.root, 'b' * 64)
+        self.assertEqual(raised.exception.url, url)
+        self.assertEqual(opener.return_value.open.call_count, 1)
+
+    def test_existing_instance_rejects_non_loopback_url(self):
+        (self.root / 'instance.json').write_text(json.dumps({
+            'pid': os.getpid(), 'url': 'https://example.com/#local-token', 'port': 443,
+        }))
+        with patch('desktop.bootstrap.build_opener') as opener:
+            self.assertIsNone(existing_instance_url(self.root))
+            opener.assert_not_called()
+
     def test_exit_removes_session_but_preserves_other_user_files(self):
         sentinel = self.root / 'credentials'
         sentinel.write_text('preserve')
-        config = SimpleNamespace(URL='https://github.com/fixture', SHA256='fixture', EXECUTABLE='client')
+        payload = b'cached resource'
+        digest = hashlib.sha256(payload).hexdigest()
+        config = SimpleNamespace(URL='https://github.com/fixture', SHA256=digest, EXECUTABLE='client')
         def unpack(archive, destination):
             destination.mkdir()
             (destination / 'client').touch()
+        def fetch(url, destination, expected, ui=None):
+            destination.write_bytes(payload)
         with patch.dict(sys.modules, {'_bootstrap_release': config}), \
                 patch.dict(os.environ, {'LOCALAPPDATA': str(self.root)}), \
-                patch('desktop.bootstrap.download'), patch('desktop.bootstrap.extract', side_effect=unpack), \
+                patch('desktop.bootstrap.download', side_effect=fetch), patch('desktop.bootstrap.extract', side_effect=unpack), \
                 patch('desktop.bootstrap.signal.signal'), patch('desktop.bootstrap.subprocess.Popen') as launch:
             launch.return_value.pid = os.getpid()
             launch.return_value.wait.return_value = 0
             launch.return_value.poll.return_value = 0
             self.assertEqual(main(), 0)
-        self.assertEqual(list((self.root / 'LynkCoHelper/downloads').iterdir()), [])
+        downloads = self.root / 'LynkCoHelper/downloads'
+        self.assertEqual(list(downloads.glob('session-*')), [])
+        self.assertEqual((downloads / 'cache' / f'{digest}.tar.gz').read_bytes(), payload)
         self.assertEqual(sentinel.read_text(), 'preserve')
 
     def test_bad_download_never_starts_client_and_is_cleaned(self):

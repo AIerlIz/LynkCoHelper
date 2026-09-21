@@ -1,7 +1,10 @@
 import json
+import io
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from unittest.mock import Mock
+from urllib.error import URLError
 from desktop.cloud_client import CloudClient, CloudError
 
 
@@ -63,6 +66,18 @@ class CloudClientTests(unittest.TestCase):
         with self.assertRaises(CloudError):
             self.client.request('POST', '/v1/owners', {}, 'secret')
         self.assertEqual(len(self.requests), 1)
+
+    def test_remote_request_retries_direct_when_system_proxy_cannot_connect(self):
+        client = CloudClient('https://cloud.example')
+        client.opener = Mock()
+        client.opener.open.side_effect = URLError('proxy unavailable')
+        client.direct_opener = Mock()
+        client.direct_opener.open.return_value = io.BytesIO(b'{"ok":true,"data":{"value":1}}')
+
+        self.assertEqual(client.request('GET', '/health'), {'value': 1})
+
+        client.opener.open.assert_called_once()
+        client.direct_opener.open.assert_called_once()
 
 
 if __name__ == '__main__':

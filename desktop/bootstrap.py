@@ -12,8 +12,8 @@ import sys
 import tarfile
 import tempfile
 import time
-from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener, HTTPSHandler
+from urllib.parse import urlsplit, urlunsplit
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener, HTTPSHandler
 
 import certifi
 import psutil
@@ -22,9 +22,16 @@ MAX_ARCHIVE = 512 * 1024 * 1024
 MAX_EXTRACTED = 2 * 1024 * 1024 * 1024
 
 
+class ExistingInstanceBusy(RuntimeError):
+    def __init__(self, message, url):
+        super().__init__(message)
+        self.url = url
+
+
 class ProgressUI:
     def __init__(self):
         self.root = self.label = self.detail = self.progress = None
+        self.cancelled = False
         # Release launchers always show a Tk window. Source and test runs keep
         # terminal output unless the UI is explicitly requested.
         if not getattr(sys, 'frozen', False) and os.environ.get('LYNKCO_FORCE_PROGRESS_UI') != '1':
@@ -36,7 +43,7 @@ class ProgressUI:
             self.root.title('LynkCoHelper')
             self.root.geometry('460x180')
             self.root.resizable(False, False)
-            self.root.protocol('WM_DELETE_WINDOW', lambda: None)
+            self.root.protocol('WM_DELETE_WINDOW', self.request_close)
             self.root.lift()
             self.root.attributes('-topmost', True)
             self.root.focus_force()
@@ -56,6 +63,7 @@ class ProgressUI:
 
     def phase(self, text, detail=''):
         if self.root:
+            self._check_cancelled()
             self.label.config(text=text)
             self.detail.config(text=detail)
             self.progress.stop()
@@ -63,11 +71,13 @@ class ProgressUI:
             self.progress.config(value=0)
             self.root.update_idletasks()
             self.root.update()
+            self._check_cancelled()
         else:
             self._terminal(text, detail)
 
     def download(self, done, total):
         if self.root:
+            self._check_cancelled()
             if total:
                 self.progress.stop()
                 self.progress.config(mode='determinate', value=done / total * 100)
@@ -77,6 +87,14 @@ class ProgressUI:
             self.detail.config(text=f'{done / 1048576:.1f} MB' + (f' / {total / 1048576:.1f} MB' if total else ''))
             self.root.update_idletasks()
             self.root.update()
+            self._check_cancelled()
+
+    def request_close(self):
+        self.cancelled = True
+
+    def _check_cancelled(self):
+        if self.cancelled:
+            raise KeyboardInterrupt
 
     def error(self, message):
         if self.root:
@@ -101,6 +119,14 @@ class ProgressUI:
         if self.root:
             self.progress.stop()
             self.root.destroy()
+            self.root = None
+
+    def pump(self):
+        if self.root:
+            self._check_cancelled()
+            self.root.update_idletasks()
+            self.root.update()
+            self._check_cancelled()
 
 
 class SecureRedirect(HTTPRedirectHandler):
@@ -109,6 +135,81 @@ class SecureRedirect(HTTPRedirectHandler):
         if parsed.scheme != 'https' or parsed.hostname not in {'github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com'}:
             raise ValueError('Unexpected download redirect')
         return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+class NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def existing_instance_url(root, expected_release=None):
+    try:
+        record = json.loads((root / 'instance.json').read_text())
+        pid, value = record['pid'], record['url']
+        if type(pid) is not int or pid <= 0 or not psutil.pid_exists(pid):
+            return None
+        parsed = urlsplit(value)
+        if (parsed.scheme != 'http' or parsed.hostname not in {'127.0.0.1', 'localhost'}
+                or parsed.username or parsed.password or parsed.path not in ('', '/')
+                or parsed.query or not parsed.fragment or len(parsed.fragment) > 128):
+            return None
+        status = urlunsplit((parsed.scheme, parsed.netloc, '/api/status', '', ''))
+        request = Request(status, headers={'Authorization': 'Bearer ' + parsed.fragment})
+        with build_opener(ProxyHandler({}), NoRedirect()).open(request, timeout=2) as response:
+            payload = response.read(65537)
+        result = json.loads(payload)
+        if len(payload) > 65536 or not isinstance(result, dict) or result.get('ok') is not True:
+            return None
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        return None
+    if expected_release is None or record.get('releaseSha') == expected_release:
+        return value
+    data = result.get('data')
+    proxy = data.get('proxy') if isinstance(data, dict) else None
+    if isinstance(proxy, dict) and proxy.get('running') is True:
+        raise ExistingInstanceBusy('旧版客户端仍连接着手机代理，请先在已打开的页面中断开连接，再重新启动新版。', value)
+    quit_url = urlunsplit((parsed.scheme, parsed.netloc, '/api/quit', '', ''))
+    quit_request = Request(
+        quit_url,
+        data=b'{}',
+        headers={'Authorization': 'Bearer ' + parsed.fragment, 'Content-Type': 'application/json'},
+        method='POST',
+    )
+    try:
+        with build_opener(ProxyHandler({}), NoRedirect()).open(quit_request, timeout=2) as response:
+            quit_payload = response.read(65537)
+        quit_result = json.loads(quit_payload)
+        if (len(quit_payload) > 65536 or not isinstance(quit_result, dict)
+                or quit_result.get('ok') is not True):
+            raise ValueError()
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
+        raise ExistingInstanceBusy('无法关闭正在运行的旧版客户端，请先退出旧版后重试。', value) from error
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if not psutil.pid_exists(pid):
+            (root / 'instance.json').unlink(missing_ok=True)
+            return None
+        time.sleep(.1)
+    raise ExistingInstanceBusy('旧版客户端尚未完全退出，请稍后重新启动新版。', value)
+
+
+def open_page(url):
+    if sys.platform == 'darwin':
+        try:
+            subprocess.Popen(['open', url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return
+        except OSError:
+            pass
+    import webbrowser
+    webbrowser.open(url)
+
+
+def wait_for_child(child, ui):
+    while True:
+        try:
+            return child.wait(timeout=.1)
+        except subprocess.TimeoutExpired:
+            ui.pump()
 
 
 def download(url, destination, expected, ui=None):
@@ -130,6 +231,52 @@ def download(url, destination, expected, ui=None):
                 ui.download(size, total)
     if digest.hexdigest() != expected:
         raise ValueError('Resource SHA-256 mismatch; download rejected')
+
+
+def file_digest(path):
+    digest = hashlib.sha256()
+    size = 0
+    with path.open('rb') as source:
+        while chunk := source.read(1024 * 1024):
+            size += len(chunk)
+            if size > MAX_ARCHIVE:
+                return None
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def cached_archive(root, url, expected, ui=None):
+    if len(expected) != 64 or any(character not in '0123456789abcdef' for character in expected.lower()):
+        raise ValueError('Invalid resource SHA-256')
+    cache = root / 'cache'
+    cache.mkdir(parents=True, exist_ok=True, mode=0o700)
+    archive = cache / f'{expected.lower()}.tar.gz'
+    if archive.is_file() and not archive.is_symlink() and file_digest(archive) == expected.lower():
+        prune_archives(cache, archive)
+        return archive
+    archive.unlink(missing_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix='download-', suffix='.tmp', dir=cache)
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    try:
+        if ui:
+            ui.phase('⬇️ 正在下载客户端资源', '首次下载完成后将复用已校验的本地资源')
+        download(url, temporary, expected.lower(), ui)
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, archive)
+        prune_archives(cache, archive)
+        return archive
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def prune_archives(cache, current):
+    for candidate in cache.glob('*.tar.gz'):
+        if candidate == current or candidate.is_symlink() or not candidate.is_file():
+            continue
+        name = candidate.name.removesuffix('.tar.gz')
+        if len(name) == 64 and all(character in '0123456789abcdef' for character in name.lower()):
+            candidate.unlink(missing_ok=True)
 
 
 def extract(archive, destination):
@@ -173,6 +320,18 @@ def cleanup_stale(root):
 
 def main():
     from _bootstrap_release import URL, SHA256, EXECUTABLE
+    state_root = Path(os.environ.get('LOCALAPPDATA', str(Path.home() / 'Library' / 'Application Support'))) / 'LynkCoHelper'
+    try:
+        existing = existing_instance_url(state_root, SHA256)
+    except ExistingInstanceBusy as error:
+        open_page(error.url)
+        ui = ProgressUI()
+        ui.error(str(error))
+        ui.close()
+        return 1
+    if existing:
+        open_page(existing)
+        return 0
     base = Path(os.environ.get('LOCALAPPDATA', str(Path.home() / 'Library' / 'Caches'))) / 'LynkCoHelper' / 'downloads'
     base.mkdir(parents=True, exist_ok=True, mode=0o700)
     cleanup_stale(base)
@@ -187,10 +346,8 @@ def main():
         raise KeyboardInterrupt
     signal.signal(signal.SIGTERM, stop)
     try:
-        ui.phase('🔍 正在检查版本', '准备下载客户端资源')
-        ui.phase('⬇️ 正在下载客户端资源', '资源将保存到临时目录，客户端退出后自动删除')
-        archive = session / 'resources.tar.gz'
-        download(URL, archive, SHA256, ui)
+        ui.phase('🔍 正在检查版本', '正在检查本地客户端资源')
+        archive = cached_archive(base, URL, SHA256, ui)
         ui.phase('🧮 正在校验 SHA-256', '校验通过后才会解压和运行')
         archive_size = archive.stat().st_size if archive.exists() else 0
         ui.download(archive_size, archive_size)
@@ -199,13 +356,16 @@ def main():
         executable = session / 'app' / EXECUTABLE
         if not executable.is_file():
             raise ValueError('Client executable missing')
-        child = subprocess.Popen([str(executable), '--bootstrap-parent', json.dumps(owner), '--bootstrap-stop', str(stop_file)])
+        child = subprocess.Popen([
+            str(executable), '--bootstrap-parent', json.dumps(owner), '--bootstrap-stop', str(stop_file),
+            '--release-sha', SHA256,
+        ])
         try:
             record.write_text(json.dumps([owner, identity(child.pid)]))
         except psutil.NoSuchProcess:
             return child.wait()
         ui.phase('🚀 正在启动客户端', '启动完成后可关闭此窗口')
-        return child.wait()
+        return wait_for_child(child, ui)
     except KeyboardInterrupt:
         return 130
     except Exception as error:
@@ -225,9 +385,12 @@ def main():
                 except subprocess.TimeoutExpired:
                     child.kill()
                     child.wait()
-        ui.phase('🧹 正在清理临时资源', '正在删除本次下载和解压目录')
-        shutil.rmtree(session, ignore_errors=True)
-        ui.close()
+        try:
+            ui.cancelled = False
+            ui.phase('🧹 正在清理临时资源', '正在删除本次解压目录')
+        finally:
+            shutil.rmtree(session, ignore_errors=True)
+            ui.close()
 
 
 if __name__ == '__main__':

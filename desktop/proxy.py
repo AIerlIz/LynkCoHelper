@@ -13,6 +13,7 @@ import time
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from desktop.http_server import LocalHTTPServer
+import psutil
 
 
 def network_addresses():
@@ -97,7 +98,11 @@ class ProxyManager:
                         '--set', 'confdir=' + str(self.root / 'ca'), '--set', 'block_private=false',
                         '-s', str(addon)]
             environment = dict(os.environ, LYNKCO_CALLBACK_URL=self.callback_url, LYNKCO_CALLBACK_TOKEN=self.callback_token,
-                               LYNKCO_PROXY_STATE=str(self.state_path), LYNKCO_PHONE_PLATFORM=platform)
+                               LYNKCO_PROXY_STATE=str(self.state_path), LYNKCO_PHONE_PLATFORM=platform,
+                               LYNKCO_PROXY_PARENT=json.dumps({
+                                   'pid': os.getpid(),
+                                   'created': psutil.Process(os.getpid()).create_time(),
+                               }))
             self.process = subprocess.Popen(command, env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                             stderr=subprocess.DEVNULL, cwd=str(Path(__file__).resolve().parent.parent))
             deadline = time.monotonic() + 15
@@ -139,12 +144,13 @@ class ProxyManager:
                         body, mime = ca.read_bytes(), 'application/x-x509-ca-cert'
                     else:
                         body = (f'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
-                                f'<title>领克助手 · 手机连接</title><body><h1>领克助手</h1><p>手机已配对。</p>'
+                                f'<title>每日任务助手 · 手机连接</title><body><h1>每日任务助手</h1><p>手机已配对。</p>'
                                 f'<p><a href="/{html.escape(manager.pair_token)}/certificate.cer">下载本机证书</a></p>'
+                                '<p>已安装并信任过本机证书，无需重复安装。</p>'
                                 '<p>iPhone：安装描述文件后，在「设置 → 通用 → 关于本机 → 证书信任设置」中开启完全信任。</p>'
                                 '<p>安卓：在系统安全设置中安装 CA 证书，具体入口因机型而异。</p>'
                                 f'<p>Wi-Fi 手动代理服务器：{html.escape(manager.address)}<br>端口：{manager.port}</p>'
-                                '<p>完成后打开领克 App，再查看电脑上的绑定进度。绑定结束请关闭 Wi-Fi 代理并移除本次证书。</p></body></html>').encode()
+                                '<p>完成后打开对应 App，再查看电脑上的绑定进度。绑定结束后只需关闭 Wi-Fi 代理。</p></body></html>').encode()
                         mime = 'text/html; charset=utf-8'
                     self.send_response(200)
                     self.send_header('Content-Type', mime)

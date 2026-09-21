@@ -77,7 +77,7 @@ class Controller:
 
     def _request(self, method, path, body=None):
         if not self.identity:
-            raise ValueError('请先输入领取链接或恢复码')
+            raise ValueError('请先输入邀请码或恢复码')
         return self.cloud.request(method, path, body, self.identity['managementToken'])
 
     def register(self, code, recover=False):
@@ -104,23 +104,40 @@ class Controller:
             identity = self.cloud.request('POST', '/v1/users/recover', payload)
             return self._adopt_identity(identity)
 
-    def claim(self, claim_url):
-        """Redeem a self-service claim link without persisting the link itself."""
+    def claim(self, claim_code):
+        """Redeem an invitation code, accepting legacy full claim links."""
         with self.operation:
-            value = clean_string(claim_url, 2048)
+            value = clean_string(claim_code, 2048)
             if not value:
-                raise ValueError('请输入有效的领取链接')
+                raise ValueError('请输入有效的邀请码')
             parsed = urlsplit(value)
-            base = urlsplit(self.cloud.base_url)
-            if parsed.scheme != base.scheme or parsed.hostname != base.hostname or parsed.port != base.port:
-                raise ValueError('领取链接不是本助手的云端链接')
-            parts = parsed.path.rstrip('/').split('/')
-            if len(parts) != 3 or parts[1] != 'claim' or not clean_string(parts[2], 128) or not all(c.isalnum() or c in '-_' for c in parts[2]):
-                raise ValueError('领取链接格式无效')
+            token = value
+            if parsed.scheme or parsed.netloc:
+                base = urlsplit(self.cloud.base_url)
+                if parsed.scheme != base.scheme or parsed.hostname != base.hostname or parsed.port != base.port:
+                    raise ValueError('领取链接不是本助手的云端链接')
+                parts = parsed.path.rstrip('/').split('/')
+                if len(parts) != 3 or parts[1] != 'claim':
+                    raise ValueError('领取链接格式无效')
+                token = parts[2]
+            if not clean_string(token, 128) or not all(c.isalnum() or c in '-_' for c in token):
+                raise ValueError('邀请码格式无效')
             if self.identity:
                 raise ValueError('当前设备已经连接云端')
-            identity = self.cloud.request('POST', '/v1/claim/' + parts[2], {})
+            identity = self.cloud.request('POST', '/v1/claim/' + token, {})
             return self._adopt_identity(identity)
+
+    def reset_capture(self):
+        """Discard a stale local binding flow before replacing an account."""
+        with self.operation:
+            if self.proxy and self.proxy.public_state().get('running'):
+                raise ValueError('请先关闭手机代理并断开当前连接')
+            with self.lock:
+                self.session = self.candidate = None
+                self.capture_events = []
+                self.stage = 'idle'
+                self.generation += 1
+            return {'reset': True}
 
     def _adopt_identity(self, identity):
         recovery = identity['recoveryCode']
@@ -160,7 +177,7 @@ class Controller:
         with self.operation:
             with self.lock:
                 if not self.session:
-                    raise ValueError('尚未获取完整登录状态，请在手机上打开领克 App')
+                    raise ValueError('尚未获取完整登录状态，请在手机上打开对应 App')
                 session, version = dict(self.session), self.generation
             candidate = self._request('POST', '/v1/binding-candidates', {'session': session})
             with self.lock:
@@ -225,9 +242,16 @@ class Controller:
                     self._refresh_schedule_windows()
                 raise
             with self.lock:
+                for key in ('inventory', 'inventoryError', 'avatarUrl'):
+                    if self.binding and key in self.binding and key not in binding:
+                        binding[key] = self.binding[key]
                 self.binding = binding
             self._refresh_schedule_windows()
             return binding
+
+    def test_notification(self):
+        with self.operation:
+            return self._request('POST', '/v1/binding/notifications/test', {})
 
     def run(self):
         with self.operation:
