@@ -210,6 +210,68 @@ class BootstrapTests(unittest.TestCase):
 
         self.assertEqual(result, ['cancelled'])
 
+    def test_cancellation_abandons_a_body_read_that_ignores_close(self):
+        opened = threading.Event()
+        read_started = threading.Event()
+        released = threading.Event()
+        closed = threading.Event()
+
+        class BlockingResponse:
+            headers = {}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *unused):
+                self.close()
+
+            def read(self, size):
+                read_started.set()
+                released.wait(1)
+                return b''
+
+            def close(self):
+                closed.set()
+
+        class ClosingUI:
+            def pump(self):
+                if read_started.is_set():
+                    raise KeyboardInterrupt
+
+        response = BlockingResponse()
+        result = []
+
+        def work():
+            try:
+                run_worker(
+                    lambda events: download(
+                        'https://github.com/example/asset', self.root / 'download', hashlib.sha256(b'').hexdigest(),
+                        events, time.monotonic() + 5,
+                    ),
+                    ClosingUI(),
+                )
+            except KeyboardInterrupt:
+                result.append('cancelled')
+
+        with patch('desktop.bootstrap.build_opener') as opener:
+            def open_response(*unused, **kwargs):
+                opened.set()
+                return response
+
+            opener.return_value.open.side_effect = open_response
+            thread = threading.Thread(target=work)
+            thread.start()
+            try:
+                self.assertTrue(opened.wait(1))
+                self.assertTrue(read_started.wait(1))
+                thread.join(.5)
+                self.assertFalse(thread.is_alive())
+                self.assertTrue(closed.is_set())
+                self.assertEqual(result, ['cancelled'])
+            finally:
+                released.set()
+                thread.join(1)
+
     def test_cancellation_abandons_a_blocked_connection_attempt(self):
         opened = threading.Event()
         release = threading.Event()

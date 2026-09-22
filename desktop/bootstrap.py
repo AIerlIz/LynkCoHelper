@@ -377,6 +377,45 @@ def open_with_budget(opener, request, deadline, ui):
         raise
 
 
+def read_with_budget(response, size, deadline, ui):
+    completed = threading.Event()
+    abandoned = threading.Event()
+    outcome = {}
+    lock = threading.Lock()
+
+    def read_chunk():
+        try:
+            chunk = response.read(size)
+            with lock:
+                if not abandoned.is_set():
+                    outcome['chunk'] = chunk
+        except BaseException as error:
+            with lock:
+                outcome['error'] = error
+        finally:
+            completed.set()
+
+    thread = threading.Thread(target=read_chunk, daemon=True)
+    thread.start()
+    try:
+        while not completed.wait(.05):
+            check_cancelled(ui)
+            remaining_download_time(deadline)
+        check_cancelled(ui)
+        remaining_download_time(deadline)
+        with lock:
+            if 'error' in outcome:
+                raise outcome['error']
+            return outcome.get('chunk', b'')
+    except BaseException:
+        abandoned.set()
+        try:
+            response.close()
+        except BaseException:
+            pass
+        raise
+
+
 def download(url, destination, expected, ui=None, deadline=None):
     parsed = urlsplit(url)
     if parsed.scheme != 'https' or parsed.hostname != 'github.com':
@@ -396,7 +435,7 @@ def download(url, destination, expected, ui=None, deadline=None):
             with destination.open('wb') as output:
                 headers = getattr(response, 'headers', None)
                 total = int(headers.get('Content-Length', '0') or 0) if headers else 0
-                while chunk := response.read(1024 * 1024):
+                while chunk := read_with_budget(response, 1024 * 1024, deadline, ui):
                     check_cancelled(ui)
                     remaining_download_time(deadline)
                     size += len(chunk)
