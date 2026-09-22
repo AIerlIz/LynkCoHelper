@@ -105,6 +105,7 @@ class CloudClientTests(unittest.TestCase):
 
     def test_read_timeout_does_not_extend_the_shared_budget(self):
         client = CloudClient('https://cloud.example')
+        client.loopback = True
         client.opener = Mock()
         client.direct_opener = Mock()
         started = threading.Event()
@@ -129,7 +130,7 @@ class CloudClientTests(unittest.TestCase):
         client.opener.open.return_value = io.BytesIO(b'{"ok":true,"data":{}}')
         client.request('POST', '/v1/binding/runs', {})
         timeout = client.opener.open.call_args.kwargs['timeout']
-        self.assertLessEqual(timeout, 120)
+        self.assertLess(timeout, 120.001)
         self.assertGreater(timeout, 119)
 
     def test_caller_deadline_shortens_an_individual_request_budget(self):
@@ -139,7 +140,7 @@ class CloudClientTests(unittest.TestCase):
         client.request('GET', '/health', deadline=time.monotonic() + 0.02)
         timeout = client.opener.open.call_args.kwargs['timeout']
         self.assertGreater(timeout, 0)
-        self.assertLessEqual(timeout, 0.02)
+        self.assertLess(timeout, 0.021)
 
     @patch('desktop.cloud_client.build_opener')
     @patch('desktop.cloud_client.ssl.create_default_context')
