@@ -22,6 +22,7 @@ class Controller:
         self.session = None
         self.generation = 0
         self.stage = 'idle'
+        self.verification_error = None
         self.platform = None
         self.candidate = None
         self.binding = None
@@ -136,6 +137,7 @@ class Controller:
                 self.session = self.candidate = None
                 self.capture_events = []
                 self.stage = 'idle'
+                self.verification_error = None
                 self.generation += 1
             return {'reset': True}
 
@@ -153,6 +155,7 @@ class Controller:
             self.runs = {'items': [], 'nextCursor': None}
             self.generation += 1
             self.stage = 'idle'
+            self.verification_error = None
             self.error = None
         self._refresh_schedule_windows()
         return {'recoveryCode': recovery, 'saved': True}
@@ -163,29 +166,70 @@ class Controller:
         if not all(clean_string(session.get(key), 256 if key == 'deviceId' else 4096) for key in ('token', 'refreshToken', 'deviceId')):
             return False
         allowed = ('token', 'refreshToken', 'deviceId', 'platform', 'appVersion', 'appBuild', 'glDevId', 'deviceImei')
+        captured = {k: session[k] for k in allowed if k in session and clean_string(session[k])}
         with self.lock:
             if self.stage == 'cleanup':
                 return False
-            self.session = {k: session[k] for k in allowed if k in session and clean_string(session[k])}
+            if self.session == captured and self.stage in ('verifying', 'verified', 'verification_failed'):
+                return True
+            self.session = captured
             self.platform = session['platform']
             self.generation += 1
             self.candidate = None
-            self.stage = 'captured'
+            self.stage = 'verifying'
+            self.verification_error = None
+            version = self.generation
+            captured = dict(self.session)
+        threading.Thread(target=self._verify_capture, args=(captured, version), daemon=True).start()
         return True
 
-    def prepare(self):
-        with self.operation:
-            with self.lock:
-                if not self.session:
-                    raise ValueError('尚未获取完整登录状态，请在手机上打开对应 App')
-                session, version = dict(self.session), self.generation
+    @staticmethod
+    def _verification_error(error):
+        if getattr(error, 'code', None) == 'CREDENTIAL_INVALID':
+            return '登录状态已失效，请重新获取'
+        return '个人信息验证暂时失败，请稍后重试'
+
+    def _verify_capture(self, session, version):
+        try:
             candidate = self._request('POST', '/v1/binding-candidates', {'session': session})
+        except Exception as error:
             with self.lock:
-                if version != self.generation:
-                    raise ValueError('手机登录状态已更新，请重新验证')
-                self.candidate = candidate
-                self.stage = 'verified'
-            return candidate
+                if version != self.generation or self.stage != 'verifying':
+                    return
+                self.candidate = None
+                self.stage = 'verification_failed'
+                self.verification_error = self._verification_error(error)
+            return
+        with self.lock:
+            if version != self.generation or self.stage != 'verifying':
+                return
+            self.candidate = candidate
+            self.stage = 'verified'
+            self.verification_error = None
+
+    def retry_verification(self):
+        with self.lock:
+            if not self.session:
+                raise ValueError('尚未获取完整登录状态，请在手机上打开对应 App')
+            if self.stage not in ('captured', 'verification_failed'):
+                raise ValueError('个人信息正在验证或已经验证完成')
+            self.stage = 'verifying'
+            self.verification_error = None
+            version, session = self.generation, dict(self.session)
+        threading.Thread(target=self._verify_capture, args=(session, version), daemon=True).start()
+        return {'started': True}
+
+    def prepare(self):
+        """Compatibility alias for old clients that requested verification explicitly."""
+        return self.retry_verification()
+
+    def stop_capture(self):
+        """Invalidate background verification before the phone proxy is stopped."""
+        with self.lock:
+            self.session = self.candidate = None
+            self.stage = 'idle'
+            self.verification_error = None
+            self.generation += 1
 
     def activate(self, settings):
         with self.operation:
@@ -211,6 +255,7 @@ class Controller:
                 self.binding = binding
                 self.session = self.candidate = None
                 self.generation += 1
+                self.verification_error = None
             if self.proxy:
                 self.proxy.disable_capture()
             self._refresh_schedule_windows()
@@ -263,6 +308,7 @@ class Controller:
             with self.lock:
                 self.binding = self.session = self.candidate = None
                 self.runs = {'items': [], 'nextCursor': None}
+                self.verification_error = None
                 self.generation += 1
             self._refresh_schedule_windows()
             return result
@@ -279,6 +325,7 @@ class Controller:
                 'error': self.error, 'lastRefreshAt': int(self.last_refresh * 1000),
                 'binding': self.binding, 'runs': self.runs, 'candidate': self.candidate,
                 'scheduleWindows': self.schedule_windows, 'scheduleWindowsError': self.schedule_windows_error,
-                'capture': {'stage': self.stage, 'platform': self.platform, 'events': self.capture_events},
+                'capture': {'stage': self.stage, 'platform': self.platform,
+                            'verificationError': self.verification_error, 'events': self.capture_events},
                 'proxy': self.proxy.public_state() if self.proxy else {'running': False},
             })

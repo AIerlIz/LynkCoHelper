@@ -1,5 +1,7 @@
 import importlib.util
 import json
+import threading
+import time
 import unittest
 
 
@@ -17,6 +19,11 @@ class FakeCloud:
     def __init__(self):
         self.calls = []
         self.on_prepare = None
+        self.prepare_started = threading.Event()
+        self.prepare_release = threading.Event()
+        self.prepare_release.set()
+        self.prepare_gates = {}
+        self.prepare_error = None
         self.base_url = 'https://lynkco.ltools.asia'
 
     def request(self, method, path, body=None, token=None):
@@ -28,9 +35,15 @@ class FakeCloud:
                 return dict(userId='owner', managementToken='new-management', recoveryCode='new-recovery')
             return dict(userId='owner', managementToken='management-secret', recoveryCode='recovery-secret')
         if path == '/v1/binding-candidates':
+            self.prepare_started.set()
+            self.prepare_gates.get(body['session']['token'], self.prepare_release).wait(2)
             if self.on_prepare:
                 self.on_prepare()
-            return dict(id='candidate', expiresAt=9999999999999, preview=dict(points='10', alreadySigned=True), capabilities=dict(share=False))
+            if self.prepare_error:
+                raise self.prepare_error
+            candidate_id = 'candidate-new-account' if body['session']['token'] == 'new-account' else 'candidate-current-account'
+            return dict(id=candidate_id, expiresAt=9999999999999,
+                        preview=dict(points='10', alreadySigned=True), capabilities=dict(share=False))
         if path.endswith('/activate'):
             return dict(id='binding', label='car', status='active', doShare=False, canShare=False, scheduleTime='08:10', nextRunAt=0)
         if path.endswith('/runs'):
@@ -52,6 +65,18 @@ class BindingTests(unittest.TestCase):
         self.cloud = FakeCloud()
         self.controller = Controller(self.cloud, MemoryStore())
         self.controller.claim('https://lynkco.ltools.asia/claim/claim-token_123456')
+
+    def wait_for_stage(self, stage):
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            if self.controller.public_state()['capture']['stage'] == stage:
+                return self.controller.public_state()
+            time.sleep(.01)
+        self.fail(f'capture did not reach {stage}: {self.controller.public_state()}')
+
+    def capture_and_verify(self, session=SESSION):
+        self.assertTrue(self.controller.receive_capture(session))
+        return self.wait_for_stage('verified')
 
     def test_claim_link_redeems_without_persisting_link(self):
         controller = __import__('desktop.binding', fromlist=['Controller']).Controller(self.cloud, MemoryStore())
@@ -76,11 +101,60 @@ class BindingTests(unittest.TestCase):
         self.assertTrue(result['saved'])
         self.assertIn(('POST', '/v1/users/recover', {'recoveryToken': 'admin-reset-token'}), self.cloud.calls)
 
-    def test_capture_remains_local_until_explicit_prepare(self):
+    def test_complete_capture_starts_one_background_verification_without_blocking_callback(self):
+        self.cloud.prepare_release.clear()
         before = len(self.cloud.calls)
-        self.controller.receive_capture(SESSION)
-        self.assertEqual(len(self.cloud.calls), before)
-        self.assertEqual(self.controller.public_state()['capture']['stage'], 'captured')
+        started = time.monotonic()
+        self.assertTrue(self.controller.receive_capture(SESSION))
+        self.assertLess(time.monotonic() - started, .1)
+        self.assertTrue(self.cloud.prepare_started.wait(.5))
+        self.assertEqual(self.controller.public_state()['capture']['stage'], 'verifying')
+        self.assertEqual(len(self.cloud.calls), before + 1)
+        self.cloud.prepare_release.set()
+        self.wait_for_stage('verified')
+        self.assertEqual(len(self.cloud.calls), before + 1)
+
+    def test_duplicate_capture_does_not_start_a_second_verification(self):
+        self.cloud.prepare_release.clear()
+        self.assertTrue(self.controller.receive_capture(SESSION))
+        self.assertTrue(self.cloud.prepare_started.wait(.5))
+        self.assertTrue(self.controller.receive_capture(dict(SESSION)))
+        self.assertEqual(len([call for call in self.cloud.calls if call[1] == '/v1/binding-candidates']), 1)
+        self.cloud.prepare_release.set()
+        self.wait_for_stage('verified')
+
+    def test_failed_verification_exposes_a_safe_error_and_retry_keeps_session(self):
+        self.cloud.prepare_error = ValueError('upstream token=mobile-token-secret')
+        self.assertTrue(self.controller.receive_capture(SESSION))
+        state = self.wait_for_stage('verification_failed')
+        self.assertEqual(state['capture']['verificationError'], '个人信息验证暂时失败，请稍后重试')
+        self.assertNotIn('mobile-token-secret', json.dumps(state))
+        self.cloud.prepare_error = None
+        self.controller.retry_verification()
+        self.wait_for_stage('verified')
+
+    def test_new_capture_prevents_the_old_verification_from_publishing(self):
+        old_request = threading.Event()
+        self.cloud.prepare_gates[SESSION['token']] = old_request
+        self.assertTrue(self.controller.receive_capture(SESSION))
+        self.assertTrue(self.cloud.prepare_started.wait(.5))
+        self.assertTrue(self.controller.receive_capture({**SESSION, 'token': 'new-account'}))
+        state = self.wait_for_stage('verified')
+        old_request.set()
+        time.sleep(.05)
+        self.assertEqual(len([call for call in self.cloud.calls if call[1] == '/v1/binding-candidates']), 2)
+        self.assertEqual(state['candidate']['id'], 'candidate-new-account')
+
+    def test_reset_prevents_inflight_verification_from_publishing(self):
+        self.cloud.prepare_release.clear()
+        self.assertTrue(self.controller.receive_capture(SESSION))
+        self.assertTrue(self.cloud.prepare_started.wait(.5))
+        self.controller.reset_capture()
+        self.cloud.prepare_release.set()
+        time.sleep(.05)
+        state = self.controller.public_state()
+        self.assertEqual(state['capture']['stage'], 'idle')
+        self.assertIsNone(state['candidate'])
 
     def test_slot_counts_are_cached_locally_until_explicit_refresh(self):
         self.assertEqual(self.controller.public_state()['scheduleWindows']['items'][0]['remaining'],9)
@@ -91,8 +165,7 @@ class BindingTests(unittest.TestCase):
 
     def test_full_slot_refreshes_counts_and_preserves_candidate(self):
         from desktop.cloud_client import CloudError
-        self.controller.receive_capture(SESSION)
-        self.controller.prepare()
+        self.capture_and_verify()
         original = self.cloud.request
         def request(method,path,body=None,token=None):
             if path.endswith('/activate'):
@@ -109,23 +182,14 @@ class BindingTests(unittest.TestCase):
         self.assertIsNotNone(state['candidate'])
 
     def test_public_state_never_exposes_credentials(self):
-        self.controller.receive_capture(SESSION)
-        self.controller.prepare()
+        self.capture_and_verify()
         output = json.dumps(self.controller.public_state())
         for secret in [*SESSION.values(), 'management-secret', 'recovery-secret']:
             if secret not in ['IOS', 'device']:
                 self.assertNotIn(secret, output)
 
-    def test_new_capture_invalidates_inflight_validation(self):
-        self.controller.receive_capture(SESSION)
-        self.cloud.on_prepare = lambda: self.controller.receive_capture({**SESSION, 'token': 'new-account'})
-        with self.assertRaisesRegex(ValueError, '重新'):
-            self.controller.prepare()
-        self.assertIsNone(self.controller.public_state()['candidate'])
-
     def test_activation_clears_local_session(self):
-        self.controller.receive_capture(SESSION)
-        self.controller.prepare()
+        self.capture_and_verify()
         self.controller.activate(dict(label='car', scheduleTime='08:10', doShare=False))
         self.assertEqual(self.controller.public_state()['capture']['stage'], 'cleanup')
         with self.assertRaises(ValueError):
@@ -136,8 +200,7 @@ class BindingTests(unittest.TestCase):
         self.assertEqual(self.controller.public_state()['capture']['stage'], 'idle')
 
     def test_expired_preview_returns_to_capture_step(self):
-        self.controller.receive_capture(SESSION)
-        self.controller.prepare()
+        self.capture_and_verify()
         self.controller.candidate['expiresAt'] = 1
         with self.assertRaisesRegex(ValueError, '过期'):
             self.controller.activate(dict(label='car', scheduleTime='08:10', doShare=False))
@@ -145,8 +208,7 @@ class BindingTests(unittest.TestCase):
         self.assertIsNone(self.controller.public_state()['candidate'])
 
     def test_activation_failure_keeps_preview_and_does_not_claim_success(self):
-        self.controller.receive_capture(SESSION)
-        self.controller.prepare()
+        self.capture_and_verify()
         original = self.cloud.request
         def failing(method, path, body=None, token=None):
             if path.endswith('/activate'):
@@ -159,8 +221,7 @@ class BindingTests(unittest.TestCase):
         self.assertIsNone(self.controller.public_state()['binding'])
 
     def test_reset_capture_returns_replacement_flow_to_first_step(self):
-        self.controller.receive_capture(SESSION)
-        self.controller.prepare()
+        self.capture_and_verify()
         self.controller.reset_capture()
         capture = self.controller.public_state()['capture']
         self.assertEqual(capture['stage'], 'idle')

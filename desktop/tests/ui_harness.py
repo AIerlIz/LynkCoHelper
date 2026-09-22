@@ -12,6 +12,11 @@ from desktop.local_api import make_server
 import desktop.proxy
 
 
+def fixture_mode():
+    path = Path('/tmp/lynkco-ui-test-mode')
+    return path.read_text().strip() if path.exists() else ''
+
+
 class Store:
     def load(self):
         return None
@@ -33,7 +38,7 @@ class Cloud:
         if path.startswith('/v1/claim/'):
             return {'userId': 'fixture-owner', 'managementToken': 'fixture-management', 'recoveryCode': 'fixture-recovery-code-save-me'}
         if path == '/v1/schedule-windows':
-            mode = Path('/tmp/lynkco-ui-test-mode').read_text().strip() if Path('/tmp/lynkco-ui-test-mode').exists() else ''
+            mode = fixture_mode()
             if mode == 'quota-unavailable':
                 raise ValueError('暂时无法读取剩余名额')
             items = []
@@ -44,11 +49,15 @@ class Cloud:
                 items.append({'value': value, 'limit': 10, 'used': used, 'remaining': 10 - used, 'current': current})
             return {'items': items}
         if path == '/v1/binding-candidates':
-            mode = Path('/tmp/lynkco-ui-test-mode').read_text().strip() if Path('/tmp/lynkco-ui-test-mode').exists() else ''
+            mode = fixture_mode()
+            if mode == 'verification-delayed':
+                time.sleep(.75)
+            if mode == 'verification-failed':
+                raise ValueError('fixture verification unavailable')
             return {'id': 'fixture-candidate', 'expiresAt': (time.time() + (-1 if mode == 'expired' else 600)) * 1000,
                     'preview': {'verified': True, 'displayName': '测试账号'}, 'capabilities': {'share': True}}
         if path.endswith('/activate'):
-            mode = Path('/tmp/lynkco-ui-test-mode').read_text().strip() if Path('/tmp/lynkco-ui-test-mode').exists() else ''
+            mode = fixture_mode()
             if mode == 'activation-failure':
                 raise ValueError('云端暂时不可用，请稍后重试')
             self.binding = {'id': 'fixture-binding', 'label': body['label'], 'status': 'active', 'scheduleTime': body.get('scheduleTime', '08:00-10:00'),
@@ -99,8 +108,15 @@ class Proxy:
 
     def start(self, address, platform):
         self.running = self.capture_enabled = True
-        threading.Timer(.5, lambda: controller.receive_capture({'token': 'fixture-token', 'refreshToken': 'fixture-refresh',
-                                                               'deviceId': 'fixture-device', 'platform': platform})).start()
+        def capture():
+            controller.record_capture({
+                'host': 'app-services.lynkco.com.cn', 'path': '/auth/login/refresh', 'method': 'POST',
+                'status': 200, 'outcome': 'captured', 'id': 'fixture-capture',
+                'fields': {'token': True, 'refreshToken': True, 'deviceId': True, 'platform': True},
+            })
+            controller.receive_capture({'token': 'fixture-token', 'refreshToken': 'fixture-refresh',
+                                        'deviceId': 'fixture-device', 'platform': platform})
+        threading.Timer(.5, capture).start()
         return self.public_state()
 
     def stop(self):

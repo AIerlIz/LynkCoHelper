@@ -105,6 +105,8 @@ def make_server(controller, web_root, api_token, callback_token, port=0):
                         if body.get('consent') is not True:
                             raise ValueError('请确认将登录状态上传到云端')
                         result = controller.prepare()
+                    elif path == '/api/candidates/retry':
+                        result = controller.retry_verification()
                     elif path == '/api/candidates/activate':
                         result = controller.activate(body)
                     elif path == '/api/binding/settings':
@@ -136,10 +138,7 @@ def make_server(controller, web_root, api_token, callback_token, port=0):
                         if body.get('proxyRemoved') is not True:
                             raise ValueError('请先关闭手机 Wi-Fi 代理')
                         controller.proxy.stop()
-                        with controller.lock:
-                            controller.session = controller.candidate = None
-                            controller.stage = 'idle'
-                            controller.generation += 1
+                        controller.stop_capture()
                         result = {'stopped': True}
                     elif path == '/api/quit':
                         if controller.proxy and controller.proxy.public_state()['running']:

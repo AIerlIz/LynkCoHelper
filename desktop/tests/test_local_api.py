@@ -2,8 +2,9 @@ import http.client
 import importlib.util
 import json
 import threading
+import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from pathlib import Path
 
 from test_binding import FakeCloud, MemoryStore, SESSION
@@ -41,6 +42,15 @@ class LocalAPITests(unittest.TestCase):
         client.close()
         return result
 
+    def wait_for_capture_stage(self, stage):
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            state = self.controller.public_state()
+            if state['capture']['stage'] == stage:
+                return state
+            time.sleep(.01)
+        self.fail(f'capture did not reach {stage}: {self.controller.public_state()}')
+
     def test_status_requires_token(self):
         self.assertEqual(self.request('/api/status', token='')[0], 401)
         self.assertEqual(self.request('/api/status')[0], 200)
@@ -72,6 +82,31 @@ class LocalAPITests(unittest.TestCase):
         status, body = self.request('/api/capture/reset', body={})
         self.assertEqual(status, 200)
         self.assertTrue(json.loads(body)['data']['reset'])
+        self.assertEqual(self.controller.public_state()['capture']['stage'], 'idle')
+
+    def test_retry_route_restarts_failed_verification_without_resending_credentials(self):
+        self.controller.claim('claim-token_123456')
+        self.controller.cloud.prepare_error = ValueError('raw token=mobile-token-secret')
+        self.assertTrue(self.controller.receive_capture(SESSION))
+        failed = self.wait_for_capture_stage('verification_failed')
+        self.assertEqual(failed['capture']['verificationError'], '个人信息验证暂时失败，请稍后重试')
+        self.controller.cloud.prepare_error = None
+        status, body = self.request('/api/candidates/retry', body={})
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)['data']['started'])
+        self.wait_for_capture_stage('verified')
+
+    def test_stop_route_prevents_a_delayed_verification_from_reappearing(self):
+        self.controller.claim('claim-token_123456')
+        self.controller.proxy = Mock()
+        self.controller.cloud.prepare_release.clear()
+        self.assertTrue(self.controller.receive_capture(SESSION))
+        self.assertTrue(self.controller.cloud.prepare_started.wait(.5))
+        status, body = self.request('/api/capture/stop', body={'proxyRemoved': True})
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)['data']['stopped'])
+        self.controller.cloud.prepare_release.set()
+        time.sleep(.05)
         self.assertEqual(self.controller.public_state()['capture']['stage'], 'idle')
 
     def test_notification_test_route_calls_cloud(self):
