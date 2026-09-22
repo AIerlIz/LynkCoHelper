@@ -11,7 +11,7 @@
     platform = "IOS",
     busy = false;
   let proxyConfirmed = false, selectedBindingStep = null, activePair = null;
-  let verifiedCandidateKey = null, identityError = "", localDisconnected = !token;
+  let verifiedCandidateKey = null, identityError = "", localDisconnected = !token, quitting = false;
   let qrUrl = null,
     qrPair = null,
     settingsVersion = "",
@@ -1008,21 +1008,43 @@
       runTable("all-runs", historyItems);
     }, null, event.currentTarget, "加载中"),
   );
-  $("quit").addEventListener("click", async () => {
+  $("quit").addEventListener("click", async (event) => {
+    if (quitting) return;
     if (state?.proxy.running) {
       navigate("bind");
       notice("退出前，请先关闭手机代理并断开手机连接。");
       return;
     }
+    const button = event.currentTarget;
+    quitting = true;
+    button.disabled = true;
+    setButtonLoading(button, true, "退出中");
     try {
       await api("/api/quit", {});
-      notice("助手已退出，可以关闭此页面。", true);
       clearInterval(pollTimer);
+      localDisconnected = true;
+      renderDisconnectedState();
+      notice("助手已退出，可以关闭此页面。", true);
       document
         .querySelectorAll("button")
         .forEach((button) => (button.disabled = true));
     } catch (error) {
-      notice(error.message);
+      notice(
+        localDisconnected
+          ? "本机连接已断开，请重新双击打开助手。"
+          : error.message || "退出未完成，请重试。",
+      );
+      if (localDisconnected) {
+        clearInterval(pollTimer);
+        document
+          .querySelectorAll("button")
+          .forEach((item) => (item.disabled = true));
+      } else {
+        button.disabled = false;
+        quitting = false;
+      }
+    } finally {
+      setButtonLoading(button, false);
     }
   });
   let pollTimer;
