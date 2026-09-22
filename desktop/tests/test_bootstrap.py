@@ -307,6 +307,23 @@ class BootstrapTests(unittest.TestCase):
         self.assertTrue(manifest.is_file())
         self.assertIn('PerMonitorV2</dpiAwareness>', manifest.read_text(encoding='utf-8'))
 
+    def test_windows_ci_checks_both_packaged_executables(self):
+        from ruamel.yaml import YAML
+
+        workflow = Path(__file__).parents[2] / '.github' / 'workflows' / 'build-desktop.yml'
+        with workflow.open() as source:
+            steps = YAML(typ='safe').load(source)['jobs']['build']['steps']
+        desktop = next(step['run'] for step in steps if step.get('name') == 'Smoke check Windows desktop package')
+        bootstrap = next(
+            step['run'] for step in steps if step.get('name') == 'Smoke check Windows release bootstrap and DPI manifest'
+        )
+
+        self.assertIn('& $mt "-inputresource:$package;#1"', desktop)
+        self.assertIn('PerMonitorV2</dpiAwareness>', desktop)
+        self.assertIn('if ($process.HasExited) { throw', bootstrap)
+        self.assertIn('& $mt "-inputresource:$bootstrap;#1"', bootstrap)
+        self.assertIn('PerMonitorV2</dpiAwareness>', bootstrap)
+
     def test_path_traversal_and_external_symlink_rejected(self):
         for name, link in [('../outside', None), ('escape', '../../outside')]:
             with self.assertRaises(tarfile.FilterError):

@@ -87,6 +87,12 @@ jobs:
           Start-Sleep -Seconds 2
           if ($process.HasExited) { throw 'Windows desktop package exited during smoke check.' }
           Stop-Process -Id $process.Id -Force
+          $mt = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Recurse -Filter mt.exe | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $mt) { throw 'Windows manifest tool is unavailable.' }
+          $embedded = Join-Path $env:RUNNER_TEMP 'lynkco-desktop-package.manifest'
+          & $mt "-inputresource:$package;#1" "-out:$embedded"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not read the Windows desktop package manifest.' }
+          if ((Get-Content $embedded -Raw) -notmatch 'PerMonitorV2</dpiAwareness>') { throw 'PerMonitorV2 is missing from the Windows desktop package manifest.' }
       - run: python desktop/packaging/build_release.py --tag "$RELEASE_TAG" --platform "$PLATFORM"
         if: needs.prepare.outputs.tag != ''
         shell: bash
@@ -100,7 +106,8 @@ jobs:
           $bootstrap = Resolve-Path release/LynkCoHelper-cloud-windows-x64.exe
           $process = Start-Process -FilePath $bootstrap -PassThru
           Start-Sleep -Seconds 1
-          if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+          if ($process.HasExited) { throw 'Windows release bootstrap exited during smoke check.' }
+          Stop-Process -Id $process.Id -Force
           $mt = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Recurse -Filter mt.exe | Select-Object -First 1 -ExpandProperty FullName
           if (-not $mt) { throw 'Windows manifest tool is unavailable.' }
           $embedded = Join-Path $env:RUNNER_TEMP 'lynkco-release-bootstrap.manifest'
