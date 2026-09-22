@@ -11,7 +11,7 @@
     platform = "IOS",
     busy = false;
   let proxyConfirmed = false, selectedBindingStep = null, activePair = null;
-  let autoPrepareKey = null;
+  let verifiedCandidateKey = null, identityError = "", localDisconnected = !token;
   let qrUrl = null,
     qrPair = null,
     settingsVersion = "",
@@ -185,18 +185,44 @@
     $("notice").classList.toggle("good", good);
     show("notice", !!message);
   }
+  function setIdentityError(message = "") {
+    identityError = message;
+    text("identity-error", message);
+    show("identity-error", !!message);
+  }
+  function renderDisconnectedState() {
+    const disconnected = localDisconnected || !token;
+    show("disconnected-state", disconnected);
+    document.querySelector("main").classList.toggle("is-disconnected", disconnected);
+  }
   async function api(path, body) {
     if (!token) throw new Error("页面已失去本机连接，请重新双击打开每日任务助手。");
-    const response = await fetch(path, {
-      method: body === undefined ? "GET" : "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(path === "/api/binding/run" ? 160000 : 60000),
-    });
-    const result = await response.json();
+    let response;
+    try {
+      response = await fetch(path, {
+        method: body === undefined ? "GET" : "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: AbortSignal.timeout(path === "/api/binding/run" ? 160000 : 60000),
+      });
+    } catch (error) {
+      localDisconnected = true;
+      renderDisconnectedState();
+      throw error;
+    }
+    let result;
+    try {
+      result = await response.json();
+    } catch (error) {
+      localDisconnected = true;
+      renderDisconnectedState();
+      throw error;
+    }
+    localDisconnected = false;
+    renderDisconnectedState();
     if (!result.ok)
       throw new Error(result.error || "无法连接本机助手，请重新打开程序。");
     return result.data;
@@ -243,6 +269,9 @@
           ? "等待响应超时，请刷新状态后重试。"
           : error.message || "操作未完成，请重试。",
       );
+      if (activeButton?.closest?.("#identity-form")) {
+        setIdentityError("邀请码或恢复码无法使用，请核对后重试。");
+      }
     } finally {
       busy = false;
       buttons.forEach((button) => (button.disabled = disabled.get(button)));
@@ -252,11 +281,6 @@
   }
   function navigate(next) {
     view = next;
-    document
-      .querySelectorAll("[data-view]")
-      .forEach((button) =>
-        button.classList.toggle("active", button.dataset.view === view),
-      );
     text(
       "page-title",
       {
@@ -271,34 +295,14 @@
     proxyConfirmed = false;
     selectedBindingStep = null;
     activePair = null;
-    autoPrepareKey = null;
+    verifiedCandidateKey = null;
     qrPair = null;
     if (qrUrl) {
       URL.revokeObjectURL(qrUrl);
       qrUrl = null;
     }
     $("pair-qr").removeAttribute("src");
-    $("upload-consent").checked = false;
     $("proxy-removed").checked = false;
-  }
-  function captureFingerprint() {
-    if (state?.capture?.stage !== "captured") return null;
-    const event = [...(state.capture.events || [])]
-      .reverse()
-      .find((item) => item.outcome === "captured");
-    return event?.id || event?.at || `${state.proxy?.pairUrl || "local"}:${state.capture.events?.length || 0}`;
-  }
-  function silentlyPrepareCapture() {
-    if (busy || state?.capture?.stage !== "captured" || state.candidate || !$('upload-consent').checked)
-      return;
-    const key = captureFingerprint();
-    if (!key || autoPrepareKey === key) return;
-    autoPrepareKey = key;
-    text("auto-verify-status", "正在静默验证个人信息…");
-    perform(async () => {
-      await api("/api/candidates/prepare", { consent: true });
-      notice("");
-    });
   }
   function runTable(target, items) {
     const container = $(target);
@@ -376,7 +380,8 @@
   }
   function applyCapabilities() {
     const binding = state?.binding,
-      candidate = state?.candidate;
+      candidate = state?.candidate,
+      proxy = state?.proxy || {};
     $("bind-share").disabled = !candidate?.capabilities?.share;
     $("settings-share").disabled = !binding?.canShare;
     if (!candidate?.capabilities?.share) $("bind-share").checked = false;
@@ -402,6 +407,9 @@
       const form = $(prefix === "bind" ? "activate-form" : "settings-form");
       form.querySelector('[type="submit"]').disabled = !available || (prefix === "bind" ? !candidate : !binding);
     });
+    $("bind-save").disabled = !state.candidate || !selectedSlotAvailable("bind");
+    $("proxy-next").disabled = !proxy.paired;
+    $("stop-proxy").disabled = !$("proxy-removed").checked;
   }
   function selectedSlotAvailable(prefix) {
     const value = $(`${prefix}-window`).value;
@@ -456,6 +464,7 @@
       capture = state.capture,
       proxy = state.proxy;
     show("identity-panel", !state.hasIdentity || forceRecover);
+    renderDisconnectedState();
     ["overview", "bind", "history"].forEach((name) =>
       show(
         "view-" + name,
@@ -577,11 +586,16 @@
       activePair = proxy.pairUrl;
       proxyConfirmed = false;
       selectedBindingStep = null;
-      autoPrepareKey = null;
+      verifiedCandidateKey = null;
     }
     const stage = capture.stage;
     const events = capture.events || [];
-    if (["idle", "waiting"].includes(stage)) autoPrepareKey = null;
+    if (["idle", "waiting", "captured"].includes(stage)) verifiedCandidateKey = null;
+    const candidateKey = state.candidate?.expiresAt || state.candidate?.preview?.displayName || null;
+    if (stage === "verified" && state.candidate && verifiedCandidateKey !== candidateKey) {
+      verifiedCandidateKey = candidateKey;
+      selectedBindingStep = 3;
+    }
     const flowStep = stage === "cleanup" ? 4
       : stage === "verified" && state.candidate ? 3
       : !proxy.running || !proxy.paired ? 0
@@ -605,8 +619,10 @@
     show("proxy-step", step === 1);
     show("capture-step", step === 2);
     show("capture-details", step === 2);
-    show("capture-wait", stage === "waiting");
-    show("capture-ready", ["captured", "verified"].includes(stage));
+    show("capture-wait", stage === "waiting" || stage === "captured");
+    show("capture-ready", stage === "verified");
+    show("capture-verifying", stage === "verifying");
+    show("capture-verification-error", stage === "verification_failed");
     show("bind-confirm", step === 3 && !!state.candidate);
     show("bind-cleanup", step === 4);
     show("save-complete", stage === "cleanup");
@@ -616,24 +632,21 @@
     text("proxy-address", proxy.address);
     text("proxy-port", proxy.port);
     text("phone-paired", proxy.paired ? "手机已配对" : "等待手机扫码配对");
-    const loginReady = stage === "captured" || stage === "verified" || events.some((event) => event.outcome === "captured");
+    const loginReady = ["captured", "verifying", "verified", "verification_failed"].includes(stage) || events.some((event) => event.outcome === "captured");
     const profileReady = stage === "verified" || !!state.candidate;
     $("capture-login-state").className = loginReady ? "capture-state ready" : "capture-state";
     $("capture-login-state").innerHTML = `<i class="state-dot"></i>${loginReady ? "已抓到" : "等待识别"}`;
     $("capture-profile-state").className = profileReady ? "capture-state ready" : "capture-state";
     $("capture-profile-state").innerHTML = `<i class="state-dot"></i>${profileReady ? "已抓到" : "等待验证"}`;
-    if (stage === "captured") {
-      text(
-        "auto-verify-status",
-        $("upload-consent").checked
-          ? autoPrepareKey === captureFingerprint()
-            ? "个人信息验证未完成；取消后重新勾选可重试。"
-            : "已同意上传，正在准备静默验证。"
-          : "勾选后会静默验证个人信息，无需再次点击。",
-      );
-      queueMicrotask(silentlyPrepareCapture);
+    if (stage === "verifying") {
+      text("auto-verify-status", "正在静默验证个人信息，请保持手机代理开启。");
+    } else if (stage === "verification_failed") {
+      text("capture-verification-message", capture.verificationError || "个人信息验证暂时失败，请稍后重试。");
+      text("auto-verify-status", "验证未完成，不会上传或保存本次登录状态。");
     } else if (stage === "verified") {
       text("auto-verify-status", "个人信息验证完成，可以进入下一步。");
+    } else if (stage === "captured") {
+      text("auto-verify-status", "已获取登录状态，正在开始个人信息验证。");
     }
     if (step === 0 && proxy.pairUrl && qrPair !== proxy.pairUrl) {
       const requestedPair = proxy.pairUrl;
@@ -682,11 +695,6 @@
     icons();
   }
   document
-    .querySelectorAll("[data-view]")
-    .forEach((button) =>
-      button.addEventListener("click", () => navigate(button.dataset.view)),
-    );
-  document
     .querySelectorAll("[data-go-bind]")
     .forEach((button) =>
       button.addEventListener("click", () => navigate("bind")),
@@ -696,6 +704,7 @@
     .forEach((button) =>
       button.addEventListener("click", () => navigate("history")),
     );
+  $("history-back").addEventListener("click", () => navigate("overview"));
   $("bind-back").addEventListener("click", () => navigate("overview"));
   document.querySelectorAll("[data-platform]").forEach((button) =>
     button.addEventListener("click", () => {
@@ -718,6 +727,7 @@
       mode === "claim" ? "粘贴管理员发来的邀请码" : "输入恢复码，或粘贴管理员恢复链接";
     text("identity-submit", mode === "claim" ? "领取并连接" : "恢复账号");
     text("identity-help", mode === "claim" ? "邀请码只用于本次领取；旧版完整领取链接也可以继续使用。" : "恢复码永久有效但使用后会轮换；管理员恢复链接 30 分钟内有效且只能兑换一次。");
+    setIdentityError("");
   }
   document
     .querySelectorAll("[data-identity]")
@@ -728,6 +738,7 @@
     );
   $("identity-form").addEventListener("submit", (event) => {
     event.preventDefault();
+    setIdentityError("");
     perform(async () => {
       const result = await api(
         identityMode === "claim" ? "/api/claim" : "/api/recover",
@@ -742,20 +753,26 @@
       recoverySaved = result.saved;
       text("recovery-value", recovery);
       $("recovery-saved").checked = false;
+      text("recovery-error", "");
+      show("recovery-error", false);
       show("recovery-warning", !result.saved);
       $("recovery-dialog").showModal();
       if (result.saved) await api("/api/refresh", {});
     }, null, event.submitter, identityMode === "claim" ? "领取中" : "恢复中");
   });
+  $("identity-code").addEventListener("input", () => setIdentityError(""));
   $("recovery-dialog").addEventListener("cancel", (event) =>
     event.preventDefault(),
   );
   $("close-recovery").addEventListener("click", () => {
     if (!$("recovery-saved").checked) {
-      notice("请先保存恢复码。");
+      text("recovery-error", "请先保存恢复码，再继续。");
+      show("recovery-error", true);
       return;
     }
     $("recovery-dialog").close();
+    text("recovery-error", "");
+    show("recovery-error", false);
     recovery = null;
     text("recovery-value", "");
     if (!recoverySaved) identityType("recover");
@@ -802,9 +819,8 @@
         address: $("network").value,
         platform,
       });
-      $("upload-consent").checked = false;
       $("proxy-removed").checked = false;
-      autoPrepareKey = null;
+      verifiedCandidateKey = null;
       notice("");
     }, null, event.submitter, "连接中");
   });
@@ -819,14 +835,14 @@
       render();
     }),
   );
-  $("upload-consent").addEventListener("change", () => {
-    if (!$("upload-consent").checked) {
-      autoPrepareKey = null;
-      text("auto-verify-status", "勾选后会静默验证个人信息，无需再次点击。");
-      return;
-    }
-    silentlyPrepareCapture();
-  });
+  $("retry-verification").addEventListener("click", (event) =>
+    perform(
+      () => api("/api/candidates/retry", {}),
+      "已重新开始验证。",
+      event.currentTarget,
+      "验证中",
+    ),
+  );
   function chosenWindow(prefix) {
     return $(`${prefix}-window`).value;
   }
@@ -859,6 +875,7 @@
       if (state.binding) navigate("overview");
     }, "手机连接已断开，现在可以退出助手。", event.currentTarget, "断开中"),
   );
+  $("proxy-removed").addEventListener("change", applyCapabilities);
   $("refresh").addEventListener("click", (event) =>
     perform(async () => {
       historyItems = [];
@@ -1034,6 +1051,7 @@
       $(id).value = hourWindow(8);
     });
     icons();
+    renderDisconnectedState();
     if (!token) {
       notice("请重新双击打开每日任务助手，以恢复本机连接。");
       return;

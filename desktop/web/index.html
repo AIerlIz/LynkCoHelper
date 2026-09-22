@@ -9,11 +9,11 @@
     <script defer src="/lucide.js"></script>
     <script defer src="/app.js"></script>
   </head>
-  <body data-ui-version="user-dashboard-v2">
+  <body data-ui-version="user-dashboard-v3">
     <main>
       <div id="notice" class="notice" role="status" hidden></div>
       <h1 id="page-title" hidden>概览</h1>
-      <div class="utility-controls" hidden><span id="cloud-status" class="status"><span class="dot"></span>正在连接</span><span id="last-sync" class="muted"></span><button id="refresh" class="icon-button" title="刷新云端状态" aria-label="刷新云端状态"><i data-lucide="refresh-cw"></i></button><button id="quit" class="icon-button" title="退出助手" aria-label="退出助手"><i data-lucide="power"></i></button></div>
+      <div class="utility-controls"><span id="cloud-status" class="status"><span class="dot"></span>正在连接</span><span id="last-sync" class="muted"></span><button id="refresh" class="icon-button" title="刷新云端状态" aria-label="刷新云端状态"><i data-lucide="refresh-cw"></i></button><button id="quit" class="icon-button" title="退出助手" aria-label="退出助手"><i data-lucide="power"></i></button></div>
       <section id="identity-panel" hidden>
         <div class="section-heading">
           <i data-lucide="cloud"></i>
@@ -38,11 +38,16 @@
               placeholder="粘贴管理员发来的邀请码"
           /></label>
           <p id="identity-help" class="muted">粘贴管理员发来的邀请码；旧版完整领取链接也可以继续使用。</p>
+          <p id="identity-error" class="error-text" role="alert" hidden></p>
           <button class="primary" type="submit">
             <i data-lucide="arrow-right"></i
             ><span id="identity-submit">连接云端</span>
           </button>
         </form>
+      </section>
+      <section id="disconnected-state" class="disconnected-state" hidden>
+        <i data-lucide="plug-zap"></i>
+        <div><h2>本机连接已断开</h2><p>请重新双击打开助手，再继续操作。</p></div>
       </section>
       <section id="view-overview" class="view">
         <div id="empty-account" class="empty-state">
@@ -208,13 +213,13 @@
                 <p>下一步将登录状态加密保存到云端，用于每日签到和续期。</p>
               </div>
             </div>
-            <label class="check-label"
-              ><input
-                id="upload-consent"
-                type="checkbox"
-              />我同意将本次登录状态上传到云端</label
-            >
-            <p id="auto-verify-status" class="muted">勾选后会静默验证个人信息，无需再次点击。</p>
+            <p id="auto-verify-status" class="muted">开始连接即授权本机验证个人信息；验证完成后再由你确认保存到云端。</p>
+          </div>
+          <div id="capture-verifying" class="capture-status" hidden aria-live="polite">
+            <span class="pulse"></span><div><h3>正在验证个人信息</h3><p>正在安全核对登录状态，请保持手机代理开启。</p></div>
+          </div>
+          <div id="capture-verification-error" class="capture-status error" hidden role="alert">
+            <i data-lucide="circle-alert"></i><div><h3>个人信息验证未完成</h3><p id="capture-verification-message"></p><div class="binding-step-actions"><button id="retry-verification" type="button"><i data-lucide="rotate-cw"></i>重新验证</button></div></div>
           </div>
           </div>
         </div>
@@ -241,7 +246,7 @@
               ><input id="bind-share" type="checkbox" />签到时同时完成分享</label
             >
             <p id="bind-share-hint" class="muted"></p>
-            <button type="submit" class="primary">
+            <button id="bind-save" type="submit" class="primary">
               <i data-lucide="check"></i>确认保存
             </button>
           </form>
@@ -266,7 +271,7 @@
           <div class="binding-step-actions"><label class="check-label"
               ><input id="proxy-removed" type="checkbox" />我已关闭手机 Wi-Fi
               代理</label
-            ><button id="stop-proxy">
+            ><button id="stop-proxy" disabled>
               <i data-lucide="unplug"></i>断开手机连接
             </button></div>
           <p class="muted">
@@ -275,6 +280,7 @@
         </div>
       </section>
       <section id="view-history" class="view" hidden>
+        <div class="section-heading history-heading"><div><h2>运行记录</h2><p class="muted">查看最近的云端任务结果。</p></div><button id="history-back" type="button"><i data-lucide="arrow-left"></i>返回概览</button></div>
         <div id="all-runs"></div>
         <button id="more-runs" hidden>
           <i data-lucide="chevron-down"></i>加载更早记录
@@ -294,6 +300,7 @@
       <p id="recovery-warning" class="notice" hidden>
         系统凭据库保存失败。请先保存恢复码，允许钥匙串访问后，使用恢复码重新连接。
       </p>
+      <p id="recovery-error" class="error-text" role="alert" hidden></p>
       <div class="action-row">
         <button id="download-recovery">
           <i data-lucide="download"></i>下载恢复文件</button
