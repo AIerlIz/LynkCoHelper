@@ -124,6 +124,8 @@ class WebUIRuntimeTests(unittest.TestCase):
               await inFlight;
               await ticks();
               if (latePoll.get("notice").textContent !== "助手已退出，可以关闭此页面。") throw new Error("late poll overwrote quit notice");
+              if (!latePoll.get("main").classList.contains("is-disconnected")) throw new Error("late poll cleared disconnected main state");
+              if (latePoll.get("disconnected-state").hidden) throw new Error("late poll hid disconnected state");
 
               const retryable = boot((path) => {{
                 if (path === "/api/quit") return Promise.resolve(failure("服务暂时异常"));

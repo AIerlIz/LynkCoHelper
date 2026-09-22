@@ -221,8 +221,10 @@
       renderDisconnectedState();
       throw error;
     }
-    localDisconnected = false;
-    renderDisconnectedState();
+    if (!isTerminating()) {
+      localDisconnected = false;
+      renderDisconnectedState();
+    }
     if (!result.ok)
       throw new Error(result.error || "无法连接本机助手，请重新打开程序。");
     return result.data;
