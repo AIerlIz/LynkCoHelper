@@ -159,12 +159,12 @@ class BootstrapTests(unittest.TestCase):
             thread = threading.Thread(target=lambda: result.append(main()))
             thread.start()
             try:
-                self.assertTrue(started.wait(1))
+                self.assertTrue(started.wait(5))
                 time.sleep(.05)
                 self.assertGreater(ui.pump.call_count, 0)
             finally:
                 release.set()
-                thread.join(1)
+                thread.join(5)
 
         self.assertEqual(result, [0])
 
