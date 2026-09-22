@@ -337,6 +337,46 @@ def register_cancel_callback(ui, callback):
     return lambda: None
 
 
+def open_with_budget(opener, request, deadline, ui):
+    completed = threading.Event()
+    abandoned = threading.Event()
+    outcome = {}
+    lock = threading.Lock()
+
+    def connect():
+        try:
+            response = opener.open(request, timeout=remaining_download_time(deadline))
+            with lock:
+                if abandoned.is_set():
+                    response.close()
+                else:
+                    outcome['response'] = response
+        except BaseException as error:
+            with lock:
+                outcome['error'] = error
+        finally:
+            completed.set()
+
+    thread = threading.Thread(target=connect, daemon=True)
+    thread.start()
+    try:
+        while not completed.wait(.05):
+            check_cancelled(ui)
+            remaining_download_time(deadline)
+        check_cancelled(ui)
+        remaining_download_time(deadline)
+        if 'error' in outcome:
+            raise outcome['error']
+        return outcome['response']
+    except BaseException:
+        abandoned.set()
+        with lock:
+            response = outcome.get('response')
+            if response is not None:
+                response.close()
+        raise
+
+
 def download(url, destination, expected, ui=None, deadline=None):
     parsed = urlsplit(url)
     if parsed.scheme != 'https' or parsed.hostname != 'github.com':
@@ -344,7 +384,8 @@ def download(url, destination, expected, ui=None, deadline=None):
     check_cancelled(ui)
     opener = build_opener(SecureRedirect(), HTTPSHandler(context=ssl.create_default_context(cafile=certifi.where())))
     digest, size = hashlib.sha256(), 0
-    with opener.open(Request(url, headers={'User-Agent': 'LynkCoHelper-bootstrap/1'}), timeout=remaining_download_time(deadline)) as response:
+    request = Request(url, headers={'User-Agent': 'LynkCoHelper-bootstrap/1'})
+    with open_with_budget(opener, request, deadline, ui) as response:
         unregister = register_cancel_callback(ui, response.close)
         timer = None
         if deadline is not None:
@@ -441,17 +482,49 @@ def prune_archives(cache, current):
             candidate.unlink(missing_ok=True)
 
 
+def extraction_path(destination, member):
+    root = destination.resolve()
+    path = destination / member.name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.parent.resolve().is_relative_to(root):
+        raise tarfile.FilterError('Archive member escapes extraction directory')
+    return path
+
+
+def copy_member(bundle, member, destination, ui):
+    path = extraction_path(destination, member)
+    if member.isdir():
+        path.mkdir(exist_ok=True)
+        os.chmod(path, member.mode)
+        return
+    if member.issym():
+        os.symlink(member.linkname, path)
+        return
+    if not (member.isfile() or member.islnk()):
+        raise tarfile.FilterError('Unsupported archive member')
+    source = bundle.extractfile(member)
+    if source is None:
+        raise tarfile.FilterError('Archive member has no file content')
+    with source, path.open('wb') as output:
+        while chunk := source.read(1024 * 1024):
+            check_cancelled(ui)
+            output.write(chunk)
+    os.chmod(path, member.mode)
+
+
 def extract(archive, destination, ui=None):
     with tarfile.open(archive, 'r:gz') as bundle:
         members = bundle.getmembers()
         if len(members) > 50000 or sum(m.size for m in members) > MAX_EXTRACTED:
             raise ValueError('Resource archive exceeds extraction limit')
         # Validate all links and paths before any file is written.
+        safe_members = []
         for member in members:
             check_cancelled(ui)
-            tarfile.data_filter(member, str(destination))
-        check_cancelled(ui)
-        bundle.extractall(destination, members=members, filter='data')
+            safe_members.append(tarfile.data_filter(member, str(destination)))
+        for member in safe_members:
+            check_cancelled(ui)
+            copy_member(bundle, member, destination, ui)
 
 
 def prepare_launch(base, session, url, expected, executable, events):

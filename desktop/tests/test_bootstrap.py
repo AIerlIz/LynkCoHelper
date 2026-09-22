@@ -210,6 +210,87 @@ class BootstrapTests(unittest.TestCase):
 
         self.assertEqual(result, ['cancelled'])
 
+    def test_cancellation_abandons_a_blocked_connection_attempt(self):
+        opened = threading.Event()
+        release = threading.Event()
+        response_closed = threading.Event()
+
+        class Response:
+            headers = {}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *unused):
+                self.close()
+
+            def read(self, size):
+                return b''
+
+            def close(self):
+                response_closed.set()
+
+        class ClosingUI:
+            def pump(self):
+                if opened.is_set():
+                    raise KeyboardInterrupt
+
+        result = []
+
+        def work():
+            try:
+                run_worker(
+                    lambda events: download(
+                        'https://github.com/example/asset', self.root / 'download', hashlib.sha256(b'').hexdigest(),
+                        events, time.monotonic() + 5,
+                    ),
+                    ClosingUI(),
+                )
+            except KeyboardInterrupt:
+                result.append('cancelled')
+
+        with patch('desktop.bootstrap.build_opener') as opener:
+            def open_response(*unused, **kwargs):
+                opened.set()
+                release.wait(1)
+                return Response()
+
+            opener.return_value.open.side_effect = open_response
+            thread = threading.Thread(target=work)
+            thread.start()
+            try:
+                self.assertTrue(opened.wait(1))
+                thread.join(.5)
+                self.assertFalse(thread.is_alive())
+            finally:
+                release.set()
+                thread.join(1)
+
+        self.assertEqual(result, ['cancelled'])
+        self.assertTrue(response_closed.wait(1))
+
+    def test_extract_cancellation_interrupts_multi_chunk_copy(self):
+        archive = self.root / 'large.tar.gz'
+        payload = b'x' * (2 * 1024 * 1024)
+        with tarfile.open(archive, 'w:gz') as bundle:
+            info = tarfile.TarInfo('client/data.bin')
+            info.size = len(payload)
+            bundle.addfile(info, io.BytesIO(payload))
+
+        class CancellingUI:
+            checks = 0
+
+            def check_cancelled(self):
+                self.checks += 1
+                if self.checks >= 4:
+                    raise KeyboardInterrupt
+
+        with self.assertRaises(KeyboardInterrupt):
+            extract(archive, self.root / 'out', CancellingUI())
+        path = self.root / 'out' / 'client' / 'data.bin'
+        self.assertTrue(path.exists())
+        self.assertLess(path.stat().st_size, len(payload))
+
     def test_download_retries_at_most_three_times(self):
         config = SimpleNamespace(URL='https://github.com/fixture', SHA256='a' * 64, EXECUTABLE='client')
         with patch.dict(sys.modules, {'_bootstrap_release': config}), \

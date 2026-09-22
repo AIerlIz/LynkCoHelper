@@ -77,7 +77,7 @@ jobs:
       - run: python -m pip install -r desktop/requirements.lock
       - run: python -m unittest discover -s desktop/tests -v
       - run: python desktop/packaging/build.py
-      - name: Smoke check Windows package and DPI manifest
+      - name: Smoke check Windows desktop package
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -87,18 +87,26 @@ jobs:
           Start-Sleep -Seconds 2
           if ($process.HasExited) { throw 'Windows desktop package exited during smoke check.' }
           Stop-Process -Id $process.Id -Force
-          $mt = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Recurse -Filter mt.exe | Select-Object -First 1 -ExpandProperty FullName
-          if (-not $mt) { throw 'Windows manifest tool is unavailable.' }
-          $embedded = Join-Path $env:RUNNER_TEMP 'lynkco-package.manifest'
-          & $mt "-inputresource:$package;#1" "-out:$embedded"
-          if ($LASTEXITCODE -ne 0) { throw 'Could not read the Windows package manifest.' }
-          if ((Get-Content $embedded -Raw) -notmatch 'PerMonitorV2</dpiAwareness>') { throw 'PerMonitorV2 is missing from the Windows package manifest.' }
       - run: python desktop/packaging/build_release.py --tag "$RELEASE_TAG" --platform "$PLATFORM"
         if: needs.prepare.outputs.tag != ''
         shell: bash
         env:
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
           PLATFORM: ${{ matrix.platform }}
+      - name: Smoke check Windows release bootstrap and DPI manifest
+        if: runner.os == 'Windows' && needs.prepare.outputs.tag != ''
+        shell: pwsh
+        run: |
+          $bootstrap = Resolve-Path release/LynkCoHelper-cloud-windows-x64.exe
+          $process = Start-Process -FilePath $bootstrap -PassThru
+          Start-Sleep -Seconds 1
+          if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+          $mt = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Recurse -Filter mt.exe | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $mt) { throw 'Windows manifest tool is unavailable.' }
+          $embedded = Join-Path $env:RUNNER_TEMP 'lynkco-release-bootstrap.manifest'
+          & $mt "-inputresource:$bootstrap;#1" "-out:$embedded"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not read the Windows release bootstrap manifest.' }
+          if ((Get-Content $embedded -Raw) -notmatch 'PerMonitorV2</dpiAwareness>') { throw 'PerMonitorV2 is missing from the Windows release bootstrap manifest.' }
       - uses: actions/upload-artifact@v4
         if: needs.prepare.outputs.tag != ''
         with:
