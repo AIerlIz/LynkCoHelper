@@ -108,6 +108,9 @@ jobs:
           Start-Sleep -Seconds 1
           if ($process.HasExited) { throw 'Windows release bootstrap exited during smoke check.' }
           Stop-Process -Id $process.Id -Force
+          Wait-Process -Id $process.Id -Timeout 10 -ErrorAction SilentlyContinue
+          $process.Refresh()
+          if (-not $process.HasExited) { throw 'Windows release bootstrap did not terminate.' }
           $mt = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Recurse -Filter mt.exe | Select-Object -First 1 -ExpandProperty FullName
           if (-not $mt) { throw 'Windows manifest tool is unavailable.' }
           $embedded = Join-Path $env:RUNNER_TEMP 'lynkco-release-bootstrap.manifest'

@@ -321,6 +321,9 @@ class BootstrapTests(unittest.TestCase):
         self.assertIn('& $mt "-inputresource:$package;#1"', desktop)
         self.assertIn('PerMonitorV2</dpiAwareness>', desktop)
         self.assertIn('if ($process.HasExited) { throw', bootstrap)
+        self.assertIn('Wait-Process -Id $process.Id -Timeout 10', bootstrap)
+        self.assertIn('$process.Refresh()', bootstrap)
+        self.assertIn("if (-not $process.HasExited) { throw 'Windows release bootstrap did not terminate.' }", bootstrap)
         self.assertIn('& $mt "-inputresource:$bootstrap;#1"', bootstrap)
         self.assertIn('PerMonitorV2</dpiAwareness>', bootstrap)
 
