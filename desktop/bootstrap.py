@@ -52,6 +52,8 @@ def enable_windows_dpi_awareness():
 class ProgressUI:
     def __init__(self):
         self.root = self.label = self.detail = self.progress = None
+        self.backend_status = self.proxy_status = self.open_button = None
+        self._runtime_refresh = None
         self.cancelled = False
         # Release launchers always show a Tk window. Source and test runs keep
         # terminal output unless the UI is explicitly requested.
@@ -82,6 +84,14 @@ class ProgressUI:
             self.detail.pack(anchor='w', pady=(10, 14))
             self.progress = ttk.Progressbar(frame, maximum=100, mode='determinate')
             self.progress.pack(fill='x')
+            status = ttk.Frame(frame)
+            status.pack(fill='x', pady=(16, 0))
+            self.backend_status = ttk.Label(status, text='后台程序：准备中', style='Detail.TLabel')
+            self.backend_status.pack(side='left')
+            self.proxy_status = ttk.Label(status, text='手机代理：未检测', style='Detail.TLabel')
+            self.proxy_status.pack(side='left', padx=(18, 0))
+            self.open_button = ttk.Button(status, text='打开后台', state='disabled')
+            self.open_button.pack(side='right')
             self.root.update()
         except Exception:
             self.root = None
@@ -115,7 +125,35 @@ class ProgressUI:
             self._check_cancelled()
 
     def request_close(self):
+        if self._runtime_refresh:
+            try:
+                runtime = self._runtime_refresh()
+            except Exception:
+                self.detail.config(text='暂时无法确认手机代理状态，请稍后再关闭')
+                return
+            proxy = runtime.get('proxy') if isinstance(runtime, dict) else None
+            if isinstance(proxy, dict) and proxy.get('running') is True:
+                self.detail.config(text='手机代理仍在运行，请先关闭手机 Wi-Fi 代理并断开连接')
+                return
         self.cancelled = True
+
+    def set_runtime(self, url, refresh):
+        self._runtime_refresh = refresh
+        if self.open_button:
+            self.open_button.config(command=lambda: open_page(url), state='normal')
+        self.refresh_runtime()
+
+    def refresh_runtime(self):
+        if not self._runtime_refresh:
+            return None
+        runtime = self._runtime_refresh()
+        if self.backend_status:
+            self.backend_status.config(text='后台程序：运行中')
+        proxy = runtime.get('proxy') if isinstance(runtime, dict) else None
+        running = isinstance(proxy, dict) and proxy.get('running') is True
+        if self.proxy_status:
+            self.proxy_status.config(text='手机代理：运行中' if running else '手机代理：未运行')
+        return runtime
 
     def _check_cancelled(self):
         if self.cancelled:
@@ -312,12 +350,37 @@ def open_page(url):
     webbrowser.open(url)
 
 
+def local_status(url):
+    parsed = urlsplit(url)
+    if parsed.scheme != 'http' or parsed.hostname not in {'127.0.0.1', 'localhost'} \
+            or not parsed.fragment or parsed.query:
+        raise ValueError('Invalid local client URL')
+    status_url = urlunsplit((parsed.scheme, parsed.netloc, '/api/status', '', ''))
+    request = Request(status_url, headers={'Authorization': 'Bearer ' + parsed.fragment})
+    with build_opener(ProxyHandler({}), NoRedirect()).open(request, timeout=2) as response:
+        payload = response.read(65537)
+    result = json.loads(payload)
+    if len(payload) > 65536 or not isinstance(result, dict) or result.get('ok') is not True:
+        raise ValueError('本机客户端状态不可用')
+    return result.get('data') or {}
+
+
 def wait_for_child(child, ui):
+    next_status = 0
     while True:
         try:
-            return child.wait(timeout=.1)
+            result = child.wait(timeout=.1)
+            return result
         except subprocess.TimeoutExpired:
             ui.pump()
+            if time.monotonic() >= next_status:
+                refresh = getattr(ui, 'refresh_runtime', None)
+                if refresh:
+                    try:
+                        refresh()
+                    except Exception:
+                        pass
+                next_status = time.monotonic() + 1
 
 
 def wait_for_child_start(child, state_root, expected_release, ui, timeout=15):
@@ -684,6 +747,9 @@ def main():
         ui.phase('🚀 正在启动客户端', '正在打开客户端页面，请稍候')
         if not wait_for_child_start(child, state_root, SHA256, ui):
             raise RuntimeError('客户端启动后立即退出，请重新打开助手')
+        instance = json.loads((state_root / 'instance.json').read_text())
+        dashboard_url = instance['url']
+        ui.set_runtime(dashboard_url, lambda: local_status(dashboard_url))
         ui.phase('✅ 客户端已启动', '页面已打开；关闭浏览器不会退出助手，关闭此窗口将退出客户端')
         return wait_for_child(child, ui)
     except KeyboardInterrupt:

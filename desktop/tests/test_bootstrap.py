@@ -104,10 +104,23 @@ class BootstrapTests(unittest.TestCase):
         ui = ProgressUI.__new__(ProgressUI)
         ui.root = unittest.mock.Mock()
         ui.cancelled = False
+        ui._runtime_refresh = None
         ui.request_close()
 
         with self.assertRaises(KeyboardInterrupt):
             ui.pump()
+
+    def test_progress_window_cannot_close_while_phone_proxy_is_running(self):
+        ui = ProgressUI.__new__(ProgressUI)
+        ui.root = unittest.mock.Mock()
+        ui.detail = unittest.mock.Mock()
+        ui.cancelled = False
+        ui._runtime_refresh = lambda: {'proxy': {'running': True}}
+
+        ui.request_close()
+
+        self.assertFalse(ui.cancelled)
+        ui.detail.config.assert_called_once_with(text='手机代理仍在运行，请先关闭手机 Wi-Fi 代理并断开连接')
 
     def test_delayed_download_keeps_the_progress_window_pumping(self):
         payload = b'release archive'
@@ -127,6 +140,11 @@ class BootstrapTests(unittest.TestCase):
             (destination / 'client').touch()
 
         result = []
+        state_root = self.root / 'LynkCoHelper'
+        state_root.mkdir()
+        (state_root / 'instance.json').write_text(json.dumps({
+            'pid': os.getpid(), 'url': 'http://127.0.0.1:54321/#local-token', 'releaseSha': digest,
+        }))
         with patch.dict(sys.modules, {'_bootstrap_release': config}), \
                 patch.dict(os.environ, {'LOCALAPPDATA': str(self.root)}), \
                 patch('desktop.bootstrap.ProgressUI', return_value=ui), \
@@ -583,11 +601,17 @@ class BootstrapTests(unittest.TestCase):
             (destination / 'client').touch()
         def fetch(url, destination, expected, ui=None, deadline=None):
             destination.write_bytes(payload)
+        state_root = self.root / 'LynkCoHelper'
+        state_root.mkdir()
+        (state_root / 'instance.json').write_text(json.dumps({
+            'pid': os.getpid(), 'url': 'http://127.0.0.1:54321/#local-token', 'releaseSha': digest,
+        }))
         with patch.dict(sys.modules, {'_bootstrap_release': config}), \
                 patch.dict(os.environ, {'LOCALAPPDATA': str(self.root)}), \
                 patch('desktop.bootstrap.download', side_effect=fetch), patch('desktop.bootstrap.extract', side_effect=unpack), \
                 patch('desktop.bootstrap.signal.signal'), patch('desktop.bootstrap.subprocess.Popen') as launch, \
-                patch('desktop.bootstrap.wait_for_child_start', return_value=True):
+                patch('desktop.bootstrap.wait_for_child_start', return_value=True), \
+                patch('desktop.bootstrap.local_status', return_value={'proxy': {'running': False}}):
             launch.return_value.pid = os.getpid()
             launch.return_value.wait.return_value = 0
             launch.return_value.poll.return_value = 0
