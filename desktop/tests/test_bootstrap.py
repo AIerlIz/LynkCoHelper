@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 import tarfile
 import tempfile
+import threading
+import time
 import unittest
 import sys
 from types import SimpleNamespace
@@ -16,9 +18,11 @@ from desktop.bootstrap import (
     cached_archive,
     cleanup_stale,
     download,
+    download_with_retries,
     existing_instance_url,
     extract,
     main,
+    run_worker,
     wait_for_child,
 )
 
@@ -68,6 +72,160 @@ class BootstrapTests(unittest.TestCase):
         with self.assertRaises(KeyboardInterrupt):
             ui.pump()
 
+    def test_delayed_download_keeps_the_progress_window_pumping(self):
+        payload = b'release archive'
+        digest = hashlib.sha256(payload).hexdigest()
+        config = SimpleNamespace(URL='https://github.com/fixture', SHA256=digest, EXECUTABLE='client')
+        started = threading.Event()
+        release = threading.Event()
+        ui = unittest.mock.Mock(cancelled=False)
+
+        def fetch(url, destination, expected, progress=None, deadline=None):
+            started.set()
+            release.wait(1)
+            destination.write_bytes(payload)
+
+        def unpack(archive, destination, progress=None):
+            destination.mkdir()
+            (destination / 'client').touch()
+
+        result = []
+        with patch.dict(sys.modules, {'_bootstrap_release': config}), \
+                patch.dict(os.environ, {'LOCALAPPDATA': str(self.root)}), \
+                patch('desktop.bootstrap.ProgressUI', return_value=ui), \
+                patch('desktop.bootstrap.download', side_effect=fetch), \
+                patch('desktop.bootstrap.extract', side_effect=unpack), \
+                patch('desktop.bootstrap.signal.signal'), \
+                patch('desktop.bootstrap.subprocess.Popen') as launch:
+            launch.return_value.pid = os.getpid()
+            launch.return_value.wait.return_value = 0
+            launch.return_value.poll.return_value = 0
+            thread = threading.Thread(target=lambda: result.append(main()))
+            thread.start()
+            try:
+                self.assertTrue(started.wait(1))
+                time.sleep(.05)
+                self.assertGreater(ui.pump.call_count, 0)
+            finally:
+                release.set()
+                thread.join(1)
+
+        self.assertEqual(result, [0])
+
+    def test_closing_progress_window_cancels_a_delayed_download(self):
+        payload = b'release archive'
+        digest = hashlib.sha256(payload).hexdigest()
+        config = SimpleNamespace(URL='https://github.com/fixture', SHA256=digest, EXECUTABLE='client')
+        started = threading.Event()
+        release = threading.Event()
+        ui = unittest.mock.Mock(cancelled=False)
+
+        def cancel():
+            if started.is_set():
+                release.set()
+                raise KeyboardInterrupt
+
+        def fetch(url, destination, expected, progress=None, deadline=None):
+            started.set()
+            release.wait(1)
+            destination.write_bytes(payload)
+
+        result = []
+        with patch.dict(sys.modules, {'_bootstrap_release': config}), \
+                patch.dict(os.environ, {'LOCALAPPDATA': str(self.root)}), \
+                patch('desktop.bootstrap.ProgressUI', return_value=ui), \
+                patch('desktop.bootstrap.download', side_effect=fetch), \
+                patch('desktop.bootstrap.signal.signal'):
+            ui.pump.side_effect = cancel
+            thread = threading.Thread(target=lambda: result.append(main()))
+            thread.start()
+            try:
+                self.assertTrue(started.wait(1))
+                thread.join(.5)
+                self.assertFalse(thread.is_alive())
+            finally:
+                release.set()
+                thread.join(1)
+
+        self.assertEqual(result, [130])
+
+    def test_cancellation_closes_a_blocked_response_read(self):
+        opened = threading.Event()
+        released = threading.Event()
+        closed = threading.Event()
+
+        class BlockingResponse:
+            headers = {}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *unused):
+                self.close()
+
+            def read(self, size):
+                released.wait(1)
+                return b''
+
+            def close(self):
+                closed.set()
+                released.set()
+
+        class ClosingUI:
+            def pump(self):
+                if opened.is_set():
+                    raise KeyboardInterrupt
+
+        response = BlockingResponse()
+        result = []
+
+        def work():
+            try:
+                run_worker(
+                    lambda events: download(
+                        'https://github.com/example/asset', self.root / 'download', hashlib.sha256(b'').hexdigest(),
+                        events, time.monotonic() + 5,
+                    ),
+                    ClosingUI(),
+                )
+            except KeyboardInterrupt:
+                result.append('cancelled')
+
+        with patch('desktop.bootstrap.build_opener') as opener:
+            def open_response(*unused, **kwargs):
+                opened.set()
+                return response
+
+            opener.return_value.open.side_effect = open_response
+            thread = threading.Thread(target=work)
+            thread.start()
+            try:
+                self.assertTrue(opened.wait(1))
+                thread.join(.5)
+                self.assertFalse(thread.is_alive())
+                self.assertTrue(closed.is_set())
+            finally:
+                released.set()
+                thread.join(1)
+
+        self.assertEqual(result, ['cancelled'])
+
+    def test_download_retries_at_most_three_times(self):
+        config = SimpleNamespace(URL='https://github.com/fixture', SHA256='a' * 64, EXECUTABLE='client')
+        with patch.dict(sys.modules, {'_bootstrap_release': config}), \
+                patch.dict(os.environ, {'LOCALAPPDATA': str(self.root)}), \
+                patch('desktop.bootstrap.download', side_effect=TimeoutError('offline')) as fetch, \
+                patch('desktop.bootstrap.signal.signal'), patch('builtins.input'):
+            self.assertEqual(main(), 1)
+
+        self.assertEqual(fetch.call_count, 3)
+        self.assertEqual(list((self.root / 'LynkCoHelper/downloads' / 'cache').glob('download-*.tmp')), [])
+
+    def test_windows_manifest_declares_per_monitor_v2_dpi_awareness(self):
+        manifest = Path(__file__).parents[1] / 'packaging' / 'windows.manifest'
+        self.assertTrue(manifest.is_file())
+        self.assertIn('PerMonitorV2</dpiAwareness>', manifest.read_text(encoding='utf-8'))
+
     def test_path_traversal_and_external_symlink_rejected(self):
         for name, link in [('../outside', None), ('escape', '../../outside')]:
             with self.assertRaises(tarfile.FilterError):
@@ -102,14 +260,14 @@ class BootstrapTests(unittest.TestCase):
         expected = hashlib.sha256(payload).hexdigest()
         calls = []
 
-        def fetch(url, destination, digest, ui=None):
+        def fetch(url, destination, digest, ui=None, deadline=None):
             calls.append(url)
             self.assertEqual(digest, expected)
             destination.write_bytes(payload)
 
         with patch('desktop.bootstrap.download', side_effect=fetch):
-            first = cached_archive(self.root, 'https://github.com/example/asset', expected)
-            second = cached_archive(self.root, 'https://github.com/example/asset', expected)
+            first = download_with_retries(self.root, 'https://github.com/example/asset', expected)
+            second = download_with_retries(self.root, 'https://github.com/example/asset', expected)
 
         self.assertEqual(first, second)
         self.assertEqual(first.read_bytes(), payload)
@@ -122,7 +280,7 @@ class BootstrapTests(unittest.TestCase):
         cache.parent.mkdir()
         cache.write_bytes(b'corrupt')
 
-        def fetch(url, destination, digest, ui=None):
+        def fetch(url, destination, digest, ui=None, deadline=None):
             destination.write_bytes(payload)
 
         with patch('desktop.bootstrap.download', side_effect=fetch) as mocked:
@@ -217,10 +375,10 @@ class BootstrapTests(unittest.TestCase):
         payload = b'cached resource'
         digest = hashlib.sha256(payload).hexdigest()
         config = SimpleNamespace(URL='https://github.com/fixture', SHA256=digest, EXECUTABLE='client')
-        def unpack(archive, destination):
+        def unpack(archive, destination, progress=None):
             destination.mkdir()
             (destination / 'client').touch()
-        def fetch(url, destination, expected, ui=None):
+        def fetch(url, destination, expected, ui=None, deadline=None):
             destination.write_bytes(payload)
         with patch.dict(sys.modules, {'_bootstrap_release': config}), \
                 patch.dict(os.environ, {'LOCALAPPDATA': str(self.root)}), \

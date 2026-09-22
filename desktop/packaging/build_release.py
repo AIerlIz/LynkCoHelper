@@ -33,10 +33,13 @@ url = f'https://github.com/shovelshit/LynkCoHelper/releases/download/{quote(args
 executable = 'LynkCoHelper/LynkCoHelper.exe' if args.platform == 'windows-x64' else 'LynkCoHelper.app/Contents/MacOS/LynkCoHelper'
 (generated / '_bootstrap_release.py').write_text(f'URL = {url!r}\nSHA256 = {checksum!r}\nEXECUTABLE = {executable!r}\n')
 mode = '--onefile' if args.platform == 'windows-x64' else '--onedir'
-subprocess.run([sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', mode, '--windowed',
-                '--name', name, '--paths', str(generated), '--hidden-import', '_bootstrap_release',
-                '--distpath', str(out), '--workpath', str(root / 'build' / 'bootstrap'),
-                '--specpath', str(root / 'build' / 'bootstrap'), str(root / 'desktop' / 'bootstrap.py')], check=True)
+command = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', mode, '--windowed',
+           '--name', name, '--paths', str(generated), '--hidden-import', '_bootstrap_release',
+           '--distpath', str(out), '--workpath', str(root / 'build' / 'bootstrap'),
+           '--specpath', str(root / 'build' / 'bootstrap'), str(root / 'desktop' / 'bootstrap.py')]
+if args.platform == 'windows-x64':
+    command[3:3] = ['--manifest', str(root / 'desktop' / 'packaging' / 'windows.manifest')]
+subprocess.run(command, check=True)
 # A macOS executable needs its execute bit preserved during browser download.
 if args.platform != 'windows-x64':
     launcher = out / f'{name}.app'

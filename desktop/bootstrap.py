@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import queue
 import shutil
 import signal
 import ssl
@@ -11,6 +12,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener, HTTPSHandler
@@ -20,12 +22,31 @@ import psutil
 
 MAX_ARCHIVE = 512 * 1024 * 1024
 MAX_EXTRACTED = 2 * 1024 * 1024 * 1024
+DOWNLOAD_ATTEMPTS = 3
+DOWNLOAD_BUDGET = 90
+SOCKET_TIMEOUT = 5
 
 
 class ExistingInstanceBusy(RuntimeError):
     def __init__(self, message, url):
         super().__init__(message)
         self.url = url
+
+
+def enable_windows_dpi_awareness():
+    if sys.platform != 'win32':
+        return
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        if hasattr(user32, 'SetProcessDpiAwarenessContext'):
+            user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+        elif hasattr(ctypes.windll, 'shcore'):
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        else:
+            user32.SetProcessDPIAware()
+    except (AttributeError, OSError):
+        pass
 
 
 class ProgressUI:
@@ -37,6 +58,7 @@ class ProgressUI:
         if not getattr(sys, 'frozen', False) and os.environ.get('LYNKCO_FORCE_PROGRESS_UI') != '1':
             return
         try:
+            enable_windows_dpi_awareness()
             import tkinter as tk
             from tkinter import ttk
             self.root = tk.Tk()
@@ -129,6 +151,89 @@ class ProgressUI:
             self._check_cancelled()
 
 
+class WorkerEvents:
+    def __init__(self):
+        self.events = queue.Queue()
+        self.cancelled = threading.Event()
+        self._callbacks = set()
+        self._callbacks_lock = threading.Lock()
+
+    def phase(self, text, detail=''):
+        self.events.put(('phase', (text, detail)))
+
+    def download(self, done, total):
+        self.events.put(('download', (done, total)))
+
+    def cancel(self):
+        self.cancelled.set()
+        with self._callbacks_lock:
+            callbacks = tuple(self._callbacks)
+        for callback in callbacks:
+            try:
+                callback()
+            except Exception:
+                pass
+
+    def register_cancel_callback(self, callback):
+        with self._callbacks_lock:
+            if self.cancelled.is_set():
+                cancelled = True
+            else:
+                self._callbacks.add(callback)
+                cancelled = False
+        if cancelled:
+            callback()
+
+        def unregister():
+            with self._callbacks_lock:
+                self._callbacks.discard(callback)
+
+        return unregister
+
+    def check_cancelled(self):
+        if self.cancelled.is_set():
+            raise KeyboardInterrupt
+
+
+def run_worker(task, ui):
+    events = WorkerEvents()
+    completed = threading.Event()
+    outcome = {}
+
+    def work():
+        try:
+            outcome['result'] = task(events)
+        except BaseException as error:
+            outcome['error'] = error
+        finally:
+            completed.set()
+
+    thread = threading.Thread(target=work, daemon=True)
+    thread.start()
+    while not completed.is_set():
+        try:
+            ui.pump()
+            dispatch_worker_events(events, ui)
+        except KeyboardInterrupt:
+            events.cancel()
+        completed.wait(.05)
+    dispatch_worker_events(events, ui)
+    if events.cancelled.is_set():
+        raise KeyboardInterrupt
+    if 'error' in outcome:
+        raise outcome['error']
+    return outcome['result']
+
+
+def dispatch_worker_events(events, ui):
+    while True:
+        try:
+            name, arguments = events.events.get_nowait()
+        except queue.Empty:
+            return
+        getattr(ui, name)(*arguments)
+
+
 class SecureRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         parsed = urlsplit(newurl)
@@ -212,32 +317,71 @@ def wait_for_child(child, ui):
             ui.pump()
 
 
-def download(url, destination, expected, ui=None):
+def remaining_download_time(deadline):
+    if deadline is None:
+        return 30
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError('Download exceeded the 90-second limit')
+    return min(SOCKET_TIMEOUT, remaining)
+
+
+def check_cancelled(ui):
+    if ui and hasattr(ui, 'check_cancelled'):
+        ui.check_cancelled()
+
+
+def register_cancel_callback(ui, callback):
+    if ui and hasattr(ui, 'register_cancel_callback'):
+        return ui.register_cancel_callback(callback)
+    return lambda: None
+
+
+def download(url, destination, expected, ui=None, deadline=None):
     parsed = urlsplit(url)
     if parsed.scheme != 'https' or parsed.hostname != 'github.com':
         raise ValueError('Invalid release URL')
+    check_cancelled(ui)
     opener = build_opener(SecureRedirect(), HTTPSHandler(context=ssl.create_default_context(cafile=certifi.where())))
     digest, size = hashlib.sha256(), 0
-    with opener.open(Request(url, headers={'User-Agent': 'LynkCoHelper-bootstrap/1'}), timeout=30) as response, destination.open('wb') as output:
-        headers = getattr(response, 'headers', None)
-        total = int(headers.get('Content-Length', '0') or 0) if headers else 0
-        while chunk := response.read(1024 * 1024):
-            size += len(chunk)
-            if size > MAX_ARCHIVE:
-                raise ValueError('Resource archive too large')
-            digest.update(chunk)
-            output.write(chunk)
-            if ui:
-                ui.download(size, total)
+    with opener.open(Request(url, headers={'User-Agent': 'LynkCoHelper-bootstrap/1'}), timeout=remaining_download_time(deadline)) as response:
+        unregister = register_cancel_callback(ui, response.close)
+        timer = None
+        if deadline is not None:
+            timer = threading.Timer(max(0, deadline - time.monotonic()), response.close)
+            timer.daemon = True
+            timer.start()
+        try:
+            with destination.open('wb') as output:
+                headers = getattr(response, 'headers', None)
+                total = int(headers.get('Content-Length', '0') or 0) if headers else 0
+                while chunk := response.read(1024 * 1024):
+                    check_cancelled(ui)
+                    remaining_download_time(deadline)
+                    size += len(chunk)
+                    if size > MAX_ARCHIVE:
+                        raise ValueError('Resource archive too large')
+                    digest.update(chunk)
+                    output.write(chunk)
+                    if ui:
+                        ui.download(size, total)
+                remaining_download_time(deadline)
+        finally:
+            unregister()
+            if timer:
+                timer.cancel()
+    check_cancelled(ui)
     if digest.hexdigest() != expected:
         raise ValueError('Resource SHA-256 mismatch; download rejected')
 
 
-def file_digest(path):
+def file_digest(path, ui=None, deadline=None):
     digest = hashlib.sha256()
     size = 0
     with path.open('rb') as source:
         while chunk := source.read(1024 * 1024):
+            check_cancelled(ui)
+            remaining_download_time(deadline)
             size += len(chunk)
             if size > MAX_ARCHIVE:
                 return None
@@ -245,13 +389,13 @@ def file_digest(path):
     return digest.hexdigest()
 
 
-def cached_archive(root, url, expected, ui=None):
+def cached_archive(root, url, expected, ui=None, deadline=None):
     if len(expected) != 64 or any(character not in '0123456789abcdef' for character in expected.lower()):
         raise ValueError('Invalid resource SHA-256')
     cache = root / 'cache'
     cache.mkdir(parents=True, exist_ok=True, mode=0o700)
     archive = cache / f'{expected.lower()}.tar.gz'
-    if archive.is_file() and not archive.is_symlink() and file_digest(archive) == expected.lower():
+    if archive.is_file() and not archive.is_symlink() and file_digest(archive, ui, deadline) == expected.lower():
         prune_archives(cache, archive)
         return archive
     archive.unlink(missing_ok=True)
@@ -261,13 +405,31 @@ def cached_archive(root, url, expected, ui=None):
     try:
         if ui:
             ui.phase('⬇️ 正在下载客户端资源', '首次下载完成后将复用已校验的本地资源')
-        download(url, temporary, expected.lower(), ui)
+        download(url, temporary, expected.lower(), ui, deadline)
         os.chmod(temporary, 0o600)
         os.replace(temporary, archive)
         prune_archives(cache, archive)
         return archive
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def download_with_retries(root, url, expected, ui=None):
+    deadline = time.monotonic() + DOWNLOAD_BUDGET
+    error = None
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        check_cancelled(ui)
+        if ui:
+            ui.phase('⬇️ 正在下载客户端资源', f'正在下载客户端资源（第 {attempt} / {DOWNLOAD_ATTEMPTS} 次）')
+        try:
+            return cached_archive(root, url, expected, ui, deadline)
+        except KeyboardInterrupt:
+            raise
+        except (OSError, TimeoutError, ValueError) as caught:
+            error = caught
+            if time.monotonic() >= deadline:
+                break
+    raise RuntimeError(f'下载失败（已尝试 {attempt} 次）：{error}') from error
 
 
 def prune_archives(cache, current):
@@ -279,15 +441,40 @@ def prune_archives(cache, current):
             candidate.unlink(missing_ok=True)
 
 
-def extract(archive, destination):
+def extract(archive, destination, ui=None):
     with tarfile.open(archive, 'r:gz') as bundle:
         members = bundle.getmembers()
         if len(members) > 50000 or sum(m.size for m in members) > MAX_EXTRACTED:
             raise ValueError('Resource archive exceeds extraction limit')
         # Validate all links and paths before any file is written.
         for member in members:
+            check_cancelled(ui)
             tarfile.data_filter(member, str(destination))
+        check_cancelled(ui)
         bundle.extractall(destination, members=members, filter='data')
+
+
+def prepare_launch(base, session, url, expected, executable, events):
+    try:
+        archive = download_with_retries(base, url, expected, events)
+    except KeyboardInterrupt:
+        raise
+    except Exception as error:
+        raise RuntimeError(f'下载客户端资源失败：{error}') from error
+    events.phase('🧮 正在校验 SHA-256', '校验通过后才会解压和运行')
+    archive_size = archive.stat().st_size if archive.exists() else 0
+    events.download(archive_size, archive_size)
+    events.phase('📦 正在准备运行环境', '正在解压客户端资源')
+    try:
+        extract(archive, session / 'app', events)
+    except KeyboardInterrupt:
+        raise
+    except Exception as error:
+        raise RuntimeError(f'解压客户端资源失败：{error}') from error
+    path = session / 'app' / executable
+    if not path.is_file():
+        raise ValueError('客户端启动准备失败：未找到客户端程序')
+    return path
 
 
 def identity(pid):
@@ -347,15 +534,9 @@ def main():
     signal.signal(signal.SIGTERM, stop)
     try:
         ui.phase('🔍 正在检查版本', '正在检查本地客户端资源')
-        archive = cached_archive(base, URL, SHA256, ui)
-        ui.phase('🧮 正在校验 SHA-256', '校验通过后才会解压和运行')
-        archive_size = archive.stat().st_size if archive.exists() else 0
-        ui.download(archive_size, archive_size)
-        ui.phase('📦 正在准备运行环境', '正在解压客户端资源')
-        extract(archive, session / 'app')
-        executable = session / 'app' / EXECUTABLE
-        if not executable.is_file():
-            raise ValueError('Client executable missing')
+        executable = run_worker(
+            lambda events: prepare_launch(base, session, URL, SHA256, EXECUTABLE, events), ui
+        )
         child = subprocess.Popen([
             str(executable), '--bootstrap-parent', json.dumps(owner), '--bootstrap-stop', str(stop_file),
             '--release-sha', SHA256,

@@ -26,6 +26,8 @@ command = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--nam
            '--collect-all', 'keyring', '--collect-all', 'certifi',
            '--hidden-import', 'qrcode.image.svg', '--hidden-import', 'psutil',
            str(root / 'desktop' / 'launcher.py')]
+if sys.platform == 'win32':
+    command[3:3] = ['--manifest', str(root / 'desktop' / 'packaging' / 'windows.manifest')]
 if sys.platform == 'darwin':
     command[3:3] = ['--osx-bundle-identifier', 'community.lynkco.helper']
 subprocess.run(command, cwd=root, check=True)
