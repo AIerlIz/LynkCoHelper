@@ -39,3 +39,5 @@ Review found that a controller operation could perform several individually boun
 New deterministic tests prove that a timed-out refresh releases the operation lock and that the following run action can proceed. They also prove settings, activation, and deletion share the same deadline with their schedule-window follow-up requests.
 
 Follow-up verification: focused binding/cloud/web tests and JavaScript syntax passed; full desktop suite passed with 129 tests; `git diff --check` passed.
+
+The final review also removed the compatibility retry that could silently omit the caller deadline when an adapter rejected the new keyword. All cloud adapters and fixtures now declare the deadline parameter, and a regression test verifies a deadline rejection is surfaced after exactly one call. Final verification: full desktop suite 130 tests passed, focused cloud/binding/web tests passed, JavaScript syntax and diff checks passed.

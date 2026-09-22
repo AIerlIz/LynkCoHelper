@@ -86,13 +86,7 @@ class Controller:
             raise ValueError('云端请求超时，请稍后重试')
         if deadline is None:
             return self.cloud.request(method, path, body, token)
-        try:
-            return self.cloud.request(method, path, body, token, deadline=deadline)
-        except TypeError as error:
-            # Test doubles and third-party integrations before deadline support keep working.
-            if 'deadline' not in str(error):
-                raise
-            return self.cloud.request(method, path, body, token)
+        return self.cloud.request(method, path, body, token, deadline=deadline)
 
     def _request(self, method, path, body=None, deadline=None):
         if not self.identity:

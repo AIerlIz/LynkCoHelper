@@ -30,7 +30,7 @@ class Cloud:
     binding = None
     runs = []
 
-    def request(self, method, path, body=None, token=None):
+    def request(self, method, path, body=None, token=None, deadline=None):
         if path == '/health':
             return {'service': 'lynkco-helper', 'configured': True}
         if path in ('/v1/owners', '/v1/owners/recover', '/v1/users/recover'):

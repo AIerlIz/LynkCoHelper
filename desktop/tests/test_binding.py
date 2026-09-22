@@ -124,6 +124,19 @@ class BindingTests(unittest.TestCase):
         self.assertEqual(self.controller.run(), {'items': [], 'nextCursor': None})
         self.assertIn(('POST', '/v1/binding/runs', {}), self.cloud.calls)
 
+    def test_deadline_adapter_failure_is_not_retried_without_a_deadline(self):
+        calls = []
+
+        def reject_deadline(*args, **kwargs):
+            calls.append(kwargs)
+            raise TypeError("unexpected keyword argument 'deadline'")
+
+        self.cloud.request = reject_deadline
+        with self.assertRaisesRegex(TypeError, 'deadline'):
+            self.controller._cloud_request('GET', '/health', deadline=time.monotonic() + 1)
+        self.assertEqual(len(calls), 1)
+        self.assertIn('deadline', calls[0])
+
     def test_composite_actions_share_the_same_deadline_for_follow_up_refresh(self):
         self.controller.OPERATION_TIMEOUT = 5
 
@@ -320,12 +333,12 @@ class BindingTests(unittest.TestCase):
         from desktop.cloud_client import CloudError
         self.capture_and_verify()
         original = self.cloud.request
-        def request(method,path,body=None,token=None):
+        def request(method,path,body=None,token=None,deadline=None):
             if path.endswith('/activate'):
                 raise CloudError('SLOT_FULL','该区间名额已满')
             if path == '/v1/schedule-windows':
                 return {'items':[{'value':'08:00-10:00','limit':10,'used':10,'remaining':0,'current':False}]}
-            return original(method,path,body,token)
+            return original(method,path,body,token,deadline)
         self.cloud.request = request
         with self.assertRaisesRegex(ValueError,'名额已满'):
             self.controller.activate({'scheduleTime':'08:00-10:00'})
@@ -363,10 +376,10 @@ class BindingTests(unittest.TestCase):
     def test_activation_failure_keeps_preview_and_does_not_claim_success(self):
         self.capture_and_verify()
         original = self.cloud.request
-        def failing(method, path, body=None, token=None):
+        def failing(method, path, body=None, token=None, deadline=None):
             if path.endswith('/activate'):
                 raise ValueError('fixture unavailable')
-            return original(method, path, body, token)
+            return original(method, path, body, token, deadline)
         self.cloud.request = failing
         with self.assertRaises(ValueError):
             self.controller.activate(dict(label='car', scheduleTime='08:10', doShare=False))
