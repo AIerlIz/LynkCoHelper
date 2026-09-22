@@ -7,12 +7,21 @@ import unittest
 
 class MemoryStore:
     value = None
+    deleted = False
+    invalidated = False
 
     def load(self):
         return self.value
 
     def save(self, value):
         self.value = value
+
+    def delete(self):
+        self.value = None
+        self.deleted = True
+
+    def invalidate(self):
+        self.invalidated = True
 
 
 class FakeCloud:
@@ -27,6 +36,7 @@ class FakeCloud:
         self.action_started = {}
         self.action_gates = {}
         self.action_errors = {}
+        self.auth_error = None
         self.deadlines = []
         self.base_url = 'https://lynkco.ltools.asia'
 
@@ -68,6 +78,8 @@ class FakeCloud:
         if path.endswith('/runs'):
             return dict(items=[], nextCursor=None)
         if path == '/health':
+            if self.auth_error:
+                raise self.auth_error
             return dict(service='lynkco-helper', configured=True)
         if path == '/v1/schedule-windows':
             return {'items':[{'value':'08:00-10:00','limit':10,'used':1,'remaining':9,'current':False}]}
@@ -123,6 +135,21 @@ class BindingTests(unittest.TestCase):
         self.assertEqual(len(self.cloud.deadlines), 1)
         self.assertEqual(self.controller.run(), {'items': [], 'nextCursor': None})
         self.assertIn(('POST', '/v1/binding/runs', {}), self.cloud.calls)
+
+    def test_refresh_clears_expired_management_identity_and_persisted_credential(self):
+        from desktop.cloud_client import CloudError
+
+        store = MemoryStore()
+        controller = __import__('desktop.binding', fromlist=['Controller']).Controller(self.cloud, store)
+        controller.claim('claim-token_123456')
+        self.cloud.auth_error = CloudError('UNAUTHORIZED', 'expired management credential')
+
+        state = controller.refresh()
+
+        self.assertFalse(state['hasIdentity'])
+        self.assertIsNone(controller.identity)
+        self.assertIsNone(state['binding'])
+        self.assertTrue(store.invalidated)
 
     def test_deadline_adapter_failure_is_not_retried_without_a_deadline(self):
         calls = []

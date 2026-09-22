@@ -62,8 +62,8 @@ class ProgressUI:
             import tkinter as tk
             from tkinter import ttk
             self.root = tk.Tk()
-            self.root.title('LynkCoHelper')
-            self.root.geometry('460x180')
+            self.root.title('每日任务助手')
+            self.root.geometry('520x210')
             self.root.resizable(False, False)
             self.root.protocol('WM_DELETE_WINDOW', self.request_close)
             self.root.lift()
@@ -71,11 +71,14 @@ class ProgressUI:
             self.root.focus_force()
             self.root.deiconify()
             self.root.after(3000, lambda: self.root.attributes('-topmost', False))
-            frame = ttk.Frame(self.root, padding=24)
+            style = ttk.Style(self.root)
+            style.configure('Title.TLabel', font=('Arial', 16, 'bold'))
+            style.configure('Detail.TLabel', foreground='#66716b')
+            frame = ttk.Frame(self.root, padding=28)
             frame.pack(fill='both', expand=True)
-            self.label = ttk.Label(frame, text='🔍 正在检查版本', font=('Arial', 15))
+            self.label = ttk.Label(frame, text='🔍 正在检查版本', style='Title.TLabel')
             self.label.pack(anchor='w')
-            self.detail = ttk.Label(frame, text='正在准备启动器', foreground='#666')
+            self.detail = ttk.Label(frame, text='正在准备启动器', style='Detail.TLabel')
             self.detail.pack(anchor='w', pady=(10, 14))
             self.progress = ttk.Progressbar(frame, maximum=100, mode='determinate')
             self.progress.pack(fill='x')
@@ -315,6 +318,25 @@ def wait_for_child(child, ui):
             return child.wait(timeout=.1)
         except subprocess.TimeoutExpired:
             ui.pump()
+
+
+def wait_for_child_start(child, state_root, expected_release, ui, timeout=15):
+    """Wait until the extracted client has published its local HTTP endpoint."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if child.poll() is not None:
+            return False
+        ui.pump()
+        try:
+            record = json.loads((state_root / 'instance.json').read_text())
+            if (record.get('pid') == child.pid
+                    and record.get('releaseSha') == expected_release
+                    and isinstance(record.get('url'), str)):
+                return True
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+        time.sleep(.05)
+    raise TimeoutError('客户端启动超时，请重新打开助手')
 
 
 def remaining_download_time(deadline):
@@ -642,25 +664,27 @@ def main():
     record.write_text(json.dumps([owner]))
     child = None
     ui = ProgressUI()
-    stop_file = session / 'stop'
     def stop(signum, frame):
         raise KeyboardInterrupt
     signal.signal(signal.SIGTERM, stop)
+    detached = False
     try:
         ui.phase('🔍 正在检查版本', '正在检查本地客户端资源')
         executable = run_worker(
             lambda events: prepare_launch(base, session, URL, SHA256, EXECUTABLE, events), ui
         )
-        child = subprocess.Popen([
-            str(executable), '--bootstrap-parent', json.dumps(owner), '--bootstrap-stop', str(stop_file),
-            '--release-sha', SHA256,
-        ])
+        child = subprocess.Popen([str(executable), '--release-sha', SHA256])
         try:
             record.write_text(json.dumps([owner, identity(child.pid)]))
         except psutil.NoSuchProcess:
             return child.wait()
-        ui.phase('🚀 正在启动客户端', '启动完成后可关闭此窗口')
-        return wait_for_child(child, ui)
+        ui.phase('🚀 正在启动客户端', '正在打开客户端页面，请稍候')
+        if not wait_for_child_start(child, state_root, SHA256, ui):
+            raise RuntimeError('客户端启动后立即退出，请重新打开助手')
+        detached = True
+        ui.phase('✅ 客户端已启动', '客户端页面已打开，启动器将自动关闭')
+        time.sleep(.25)
+        return 0
     except KeyboardInterrupt:
         return 130
     except Exception as error:
@@ -669,8 +693,7 @@ def main():
             input('Press Enter to close.')
         return 1
     finally:
-        if child is not None and child.poll() is None:
-            stop_file.touch()
+        if child is not None and not detached and child.poll() is None:
             try:
                 child.wait(timeout=15)
             except subprocess.TimeoutExpired:

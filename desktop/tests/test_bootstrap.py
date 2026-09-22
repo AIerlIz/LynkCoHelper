@@ -83,6 +83,23 @@ class BootstrapTests(unittest.TestCase):
 
         ui.pump.assert_called_once_with()
 
+    def test_wait_for_child_start_returns_after_client_publishes_instance(self):
+        from desktop.bootstrap import wait_for_child_start
+
+        child = unittest.mock.Mock(pid=321)
+        child.poll.return_value = None
+        (self.root / 'instance.json').write_text(json.dumps({
+            'pid': 321,
+            'url': 'http://127.0.0.1:54321/#local-token',
+            'releaseSha': 'a' * 64,
+        }))
+        ui = unittest.mock.Mock()
+
+        with patch('desktop.bootstrap.time.sleep'):
+            self.assertTrue(wait_for_child_start(child, self.root, 'a' * 64, ui, timeout=1))
+
+        ui.pump.assert_called()
+
     def test_progress_window_close_requests_clean_shutdown(self):
         ui = ProgressUI.__new__(ProgressUI)
         ui.root = unittest.mock.Mock()
@@ -116,7 +133,8 @@ class BootstrapTests(unittest.TestCase):
                 patch('desktop.bootstrap.download', side_effect=fetch), \
                 patch('desktop.bootstrap.extract', side_effect=unpack), \
                 patch('desktop.bootstrap.signal.signal'), \
-                patch('desktop.bootstrap.subprocess.Popen') as launch:
+                patch('desktop.bootstrap.subprocess.Popen') as launch, \
+                patch('desktop.bootstrap.wait_for_child_start', return_value=True):
             launch.return_value.pid = os.getpid()
             launch.return_value.wait.return_value = 0
             launch.return_value.poll.return_value = 0
@@ -568,11 +586,14 @@ class BootstrapTests(unittest.TestCase):
         with patch.dict(sys.modules, {'_bootstrap_release': config}), \
                 patch.dict(os.environ, {'LOCALAPPDATA': str(self.root)}), \
                 patch('desktop.bootstrap.download', side_effect=fetch), patch('desktop.bootstrap.extract', side_effect=unpack), \
-                patch('desktop.bootstrap.signal.signal'), patch('desktop.bootstrap.subprocess.Popen') as launch:
+                patch('desktop.bootstrap.signal.signal'), patch('desktop.bootstrap.subprocess.Popen') as launch, \
+                patch('desktop.bootstrap.wait_for_child_start', return_value=True):
             launch.return_value.pid = os.getpid()
-            launch.return_value.wait.return_value = 0
             launch.return_value.poll.return_value = 0
             self.assertEqual(main(), 0)
+            command = launch.call_args.args[0]
+            self.assertNotIn('--bootstrap-parent', command)
+            self.assertNotIn('--bootstrap-stop', command)
         downloads = self.root / 'LynkCoHelper/downloads'
         self.assertEqual(list(downloads.glob('session-*')), [])
         self.assertEqual((downloads / 'cache' / f'{digest}.tar.gz').read_bytes(), payload)

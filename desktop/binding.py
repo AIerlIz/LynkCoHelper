@@ -342,6 +342,21 @@ class Controller:
                     self.binding, self.runs, self.error = binding, runs, None
                     self.last_refresh = time.time()
             except ValueError as error:
+                if getattr(error, 'code', None) in ('UNAUTHORIZED', 'CREDENTIAL_INVALID'):
+                    with self.lock:
+                        self.identity = None
+                        self.connected = False
+                        self.configured = False
+                        self.binding = None
+                        self.runs = {'items': [], 'nextCursor': None}
+                        self.error = '云端账号已失效，请重新连接账号'
+                    invalidate = getattr(self.store, 'invalidate', None)
+                    if invalidate:
+                        try:
+                            invalidate()
+                        except ValueError:
+                            pass
+                    return self.public_state()
                 with self.lock:
                     self.connected, self.error = False, str(error)
                 raise
