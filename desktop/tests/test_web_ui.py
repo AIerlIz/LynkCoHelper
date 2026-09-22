@@ -80,6 +80,12 @@ class WebUIContractTests(unittest.TestCase):
         self.assertIn('disabled = !state.candidate', JS)
         self.assertIn('disabled = !$("proxy-removed").checked', JS)
 
+    def test_pairing_exposes_wifi_rebind_and_proxy_port_controls(self):
+        self.assertIn('id="proxy-port-input"', HTML)
+        self.assertIn('id="refresh-pairing"', HTML)
+        self.assertIn('/api/capture/rebind', JS)
+        self.assertIn('proxyPort', JS)
+
     def test_replace_binding_resets_local_flow_before_navigation(self):
         handler = re.search(r'\$\("binding-replace"\).*?\n\s*\}\);', JS, re.S)
         self.assertIsNotNone(handler)

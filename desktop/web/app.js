@@ -636,6 +636,8 @@
     text("traffic-status", events.length ? `代理已收到请求 · 当前 ${events.length} 条记录` : "尚未收到代理请求");
     text("proxy-address", proxy.address);
     text("proxy-port", proxy.port);
+    if (proxy.port) $("proxy-port-input").value = proxy.port;
+    show("pairing-network-warning", !!proxy.networkChanged);
     text("phone-paired", proxy.paired ? "手机已配对" : "等待手机扫码配对");
     const loginReady = ["captured", "verifying", "verified", "verification_failed"].includes(stage) || events.some((event) => event.outcome === "captured");
     const profileReady = stage === "verified" || !!state.candidate;
@@ -820,9 +822,13 @@
   $("capture-start").addEventListener("submit", (event) => {
     event.preventDefault();
     perform(async () => {
+      const proxyPort = Number($("proxy-port-input").value);
+      if (!Number.isInteger(proxyPort) || proxyPort < 1024 || proxyPort > 65535)
+        throw new Error("代理端口必须是 1024-65535 之间的数字。");
       await api("/api/capture/start", {
         address: $("network").value,
         platform,
+        proxyPort,
       });
       $("proxy-removed").checked = false;
       verifiedCandidateKey = null;
@@ -834,6 +840,46 @@
     selectedBindingStep = 2;
     render();
   });
+  async function loadNetworks() {
+    const networks = await api("/api/networks");
+    $("network").replaceChildren();
+    networks.forEach((item) => {
+      const option = document.createElement("option");
+      option.value = item.address;
+      option.textContent = `${item.address} · ${item.name}`;
+      $("network").append(option);
+    });
+    if (!networks.length) {
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = "未找到局域网，请连接 Wi-Fi";
+      $("network").append(option);
+    }
+    return networks;
+  }
+  $("refresh-network").addEventListener("click", (event) =>
+    perform(loadNetworks, "电脑网络列表已更新", event.currentTarget, "读取中"),
+  );
+  $("refresh-pairing").addEventListener("click", (event) =>
+    perform(async () => {
+      const networks = await loadNetworks();
+      const address = $("network").value;
+      if (!networks.some((item) => item.address === address))
+        throw new Error("请选择当前电脑正在使用的 Wi-Fi 或有线网络。");
+      const proxyPort = Number($("proxy-port-input").value);
+      if (!Number.isInteger(proxyPort) || proxyPort < 1024 || proxyPort > 65535)
+        throw new Error("代理端口必须是 1024-65535 之间的数字。");
+      await api("/api/capture/rebind", { address, platform, proxyPort });
+      proxyConfirmed = false;
+      selectedBindingStep = 0;
+      qrPair = null;
+      if (qrUrl) {
+        URL.revokeObjectURL(qrUrl);
+        qrUrl = null;
+      }
+      $("pair-qr").removeAttribute("src");
+    }, "已根据当前网络重新生成二维码", event.currentTarget, "重新配对"),
+  );
   document.querySelectorAll("[data-binding-step]").forEach((button) =>
     button.addEventListener("click", () => {
       selectedBindingStep = Number(button.dataset.bindingStep);
@@ -1100,13 +1146,12 @@
     try {
       const networks = await api("/api/networks");
       if (isTerminating()) return;
-      $("network").replaceChildren();
-      networks.forEach((item) => {
+      $("network").replaceChildren(...networks.map((item) => {
         const option = document.createElement("option");
         option.value = item.address;
         option.textContent = `${item.address} · ${item.name}`;
-        $("network").append(option);
-      });
+        return option;
+      }));
       if (!networks.length) {
         const option = document.createElement("option");
         option.value = "";

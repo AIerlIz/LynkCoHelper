@@ -120,7 +120,36 @@ class BootstrapTests(unittest.TestCase):
         ui.request_close()
 
         self.assertFalse(ui.cancelled)
-        ui.detail.config.assert_called_once_with(text='手机代理仍在运行，请先关闭手机 Wi-Fi 代理并断开连接')
+        ui.detail.config.assert_called_once_with(text='当前暂无手机请求，但电脑无法证明手机代理已关闭；请在网页完成“断开手机连接”后再关闭此窗口')
+
+    def test_progress_window_explains_that_phone_proxy_must_be_confirmed_manually(self):
+        ui = ProgressUI.__new__(ProgressUI)
+        ui.root = unittest.mock.Mock()
+        ui.proxy_status = unittest.mock.Mock()
+        ui.backend_status = unittest.mock.Mock()
+        ui.open_button = unittest.mock.Mock()
+        ui.detail = unittest.mock.Mock()
+        ui.cancelled = False
+        ui._runtime_refresh = lambda: {'proxy': {'running': True, 'paired': True}}
+
+        ui.refresh_runtime()
+
+        ui.proxy_status.config.assert_called_once_with(text='手机请求：暂无请求')
+
+    def test_progress_window_can_stop_desktop_proxy_before_closing(self):
+        ui = ProgressUI.__new__(ProgressUI)
+        ui.root = unittest.mock.Mock()
+        ui.detail = unittest.mock.Mock()
+        ui.cancelled = False
+        stopped = []
+        states = iter(({'proxy': {'running': True, 'phoneProxyState': 'idle'}}, {'proxy': {'running': False}}))
+        ui._runtime_refresh = lambda: next(states)
+        ui._runtime_stop = lambda: stopped.append(True)
+
+        ui.request_close()
+
+        self.assertEqual(stopped, [True])
+        self.assertTrue(ui.cancelled)
 
     def test_delayed_download_keeps_the_progress_window_pumping(self):
         payload = b'release archive'

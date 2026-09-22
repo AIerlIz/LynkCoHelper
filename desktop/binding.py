@@ -80,6 +80,8 @@ class Controller:
             if event['id']:
                 self.capture_events = [e for e in self.capture_events if e.get('id') != event['id']]
             self.capture_events = (self.capture_events + [event])[-200:]
+        if self.proxy:
+            self.proxy.note_activity()
 
     def _cloud_request(self, method, path, body=None, token=None, deadline=None):
         if deadline is not None and deadline <= time.monotonic():
@@ -170,6 +172,37 @@ class Controller:
                 self.verification_error = None
                 self.generation += 1
             return {'reset': True}
+
+    def clear_local_identity(self):
+        """Remove the local management credential without deleting the cloud binding."""
+        with self.operation:
+            if self.proxy and self.proxy.public_state().get('running'):
+                raise ValueError('请先关闭手机代理并断开当前连接，再清除本地登录态')
+            self.store.delete()
+            with self.lock:
+                self.identity = None
+                self.connected = False
+                self.configured = False
+                self.binding = None
+                self.runs = {'items': [], 'nextCursor': None}
+                self.error = None
+                self.session = self.candidate = None
+                self.platform = None
+                self.capture_events = []
+                self.stage = 'idle'
+                self.verification_error = None
+                self.schedule_windows = None
+                self.schedule_windows_error = None
+                self.generation += 1
+            return {'cleared': True}
+
+    def force_stop_proxy(self):
+        """Stop the desktop proxy during launcher shutdown without claiming phone settings changed."""
+        with self.operation:
+            if self.proxy:
+                self.proxy.stop()
+            self.stop_capture()
+            return {'stopped': True, 'phoneMustDisable': True}
 
     def _adopt_identity(self, identity, deadline=None):
         recovery = identity['recoveryCode']

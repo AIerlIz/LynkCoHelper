@@ -13,6 +13,57 @@ from desktop.proxy import ProxyManager, network_addresses
 
 
 class ProxyLifecycleTests(unittest.TestCase):
+    def test_start_accepts_and_persists_configured_proxy_port(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ports = []
+            for _ in range(2):
+                with socket.socket() as probe:
+                    probe.bind(('127.0.0.1', 0))
+                    ports.append(probe.getsockname()[1])
+            (Path(directory) / 'ports.json').write_text(json.dumps({'proxy': ports[0], 'certificate': ports[1]}))
+            manager = ProxyManager(directory, 'http://127.0.0.1:1/internal/capture', 'fixture')
+            child = MagicMock()
+            child.poll.return_value = None
+            with patch('desktop.proxy.network_addresses', return_value=[{'name':'fixture','address':'127.0.0.1'}]), \
+                    patch('desktop.proxy.subprocess.Popen', return_value=child) as launch, \
+                    patch('desktop.proxy.socket.create_connection', return_value=MagicMock()):
+                state = manager.start('127.0.0.1', 'IOS', proxy_port=ports[0] + 2)
+            try:
+                self.assertEqual(state['port'], ports[0] + 2)
+                command = launch.call_args.args[0]
+                self.assertEqual(command[command.index('--listen-port') + 1], str(ports[0] + 2))
+                saved = json.loads((Path(directory) / 'ports.json').read_text())
+                self.assertEqual(saved['proxy'], ports[0] + 2)
+            finally:
+                manager.stop()
+
+    def test_start_rejects_proxy_port_matching_certificate_port(self):
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / 'ports.json').write_text(json.dumps({'proxy': 55255, 'certificate': 55268}))
+            manager = ProxyManager(directory, 'http://127.0.0.1:1/internal/capture', 'fixture')
+            with patch('desktop.proxy.network_addresses', return_value=[{'address': '127.0.0.1'}]):
+                with self.assertRaisesRegex(ValueError, '代理端口'):
+                    manager.start('127.0.0.1', 'IOS', proxy_port=55268)
+
+    def test_public_state_reports_phone_request_activity_separately_from_proxy_process(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manager = ProxyManager(directory, 'http://127.0.0.1:1/internal/capture', 'fixture')
+            manager.process = MagicMock()
+            manager.process.poll.return_value = None
+            manager.peer = '127.0.0.1'
+            with patch('desktop.proxy.network_addresses', return_value=[{'address': '127.0.0.1'}]), \
+                    patch('desktop.proxy.psutil.net_connections', return_value=[]):
+                state = manager.public_state()
+            self.assertEqual(state['phoneProxyState'], 'idle')
+            self.assertEqual(state['phoneRequests']['active'], 0)
+
+            manager.note_activity()
+            with patch('desktop.proxy.network_addresses', return_value=[{'address': '127.0.0.1'}]), \
+                    patch('desktop.proxy.psutil.net_connections', return_value=[]):
+                state = manager.public_state()
+            self.assertEqual(state['phoneProxyState'], 'recent')
+            self.assertIsNotNone(state['phoneRequests']['lastAt'])
+
     def test_proxy_child_receives_parent_process_identity(self):
         with tempfile.TemporaryDirectory() as directory:
             ports = []
@@ -62,10 +113,12 @@ class ProxyLifecycleTests(unittest.TestCase):
                     state = manager.start('127.0.0.1', 'IOS')
                 process = manager.process
                 self.assertTrue(state['running'])
+                self.assertEqual(state['phoneProxyState'], 'not_paired')
                 self.assertFalse(manager.accepts_peer('127.0.0.1'))
                 with urlopen(state['pairUrl'], timeout=3) as response:
                     self.assertEqual(response.status, 200)
                     pairing_page = response.read().decode('utf-8')
+                self.assertEqual(manager.public_state()['phoneProxyState'], 'idle')
                 self.assertIn('已安装并信任过本机证书，无需重复安装', pairing_page)
                 self.assertNotIn('移除本次证书', pairing_page)
                 self.assertNotIn('领克', pairing_page)

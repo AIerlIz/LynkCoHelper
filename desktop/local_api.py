@@ -119,6 +119,8 @@ def make_server(controller, web_root, api_token, callback_token, port=0):
                         if body.get('confirmed') is not True:
                             raise ValueError('请确认解除绑定')
                         result = controller.delete()
+                    elif path == '/api/identity/clear':
+                        result = controller.clear_local_identity()
                     elif path == '/api/history':
                         result = controller.history(body.get('cursor', ''))
                     elif path == '/api/capture/start':
@@ -126,11 +128,25 @@ def make_server(controller, web_root, api_token, callback_token, port=0):
                             raise ValueError('请先连接云端账号')
                         if body.get('platform') not in ('IOS', 'ANDROID'):
                             raise ValueError('请选择手机系统')
-                        result = controller.proxy.start(body.get('address'), body['platform'])
+                        result = controller.proxy.start(body.get('address'), body['platform'], body.get('proxyPort'))
                         with controller.lock:
                             controller.session = controller.candidate = None
                             controller.generation += 1
                             controller.stage = 'waiting'
+                            controller.capture_events = []
+                    elif path == '/api/capture/rebind':
+                        if not controller.identity:
+                            raise ValueError('请先连接云端账号')
+                        if not controller.proxy:
+                            raise ValueError('手机代理尚未启动，请先开始连接')
+                        if body.get('platform') not in ('IOS', 'ANDROID'):
+                            raise ValueError('请选择手机系统')
+                        result = controller.proxy.restart(body.get('address'), body['platform'], body.get('proxyPort'))
+                        with controller.lock:
+                            controller.session = controller.candidate = None
+                            controller.generation += 1
+                            controller.stage = 'waiting'
+                            controller.platform = body['platform']
                             controller.capture_events = []
                     elif path == '/api/capture/reset':
                         result = controller.reset_capture()
@@ -140,6 +156,8 @@ def make_server(controller, web_root, api_token, callback_token, port=0):
                         controller.proxy.stop()
                         controller.stop_capture()
                         result = {'stopped': True}
+                    elif path == '/api/capture/force-stop':
+                        result = controller.force_stop_proxy()
                     elif path == '/api/quit':
                         if controller.proxy and controller.proxy.public_state()['running']:
                             raise ValueError('请先关闭手机代理，并完成断开连接')

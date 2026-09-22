@@ -115,6 +115,19 @@ class BindingTests(unittest.TestCase):
         self.assertTrue(result['saved'])
         self.assertIn(('POST', '/v1/claim/claim-token_123456', {}), self.cloud.calls)
 
+    def test_clear_local_identity_removes_only_local_credential(self):
+        store = MemoryStore()
+        controller = __import__('desktop.binding', fromlist=['Controller']).Controller(self.cloud, store)
+        controller.claim('claim-token_123456')
+        controller.binding = {'id': 'binding'}
+
+        result = controller.clear_local_identity()
+
+        self.assertEqual(result, {'cleared': True})
+        self.assertIsNone(controller.identity)
+        self.assertIsNone(controller.binding)
+        self.assertTrue(store.deleted)
+
     def test_refresh_uses_one_operation_deadline_and_releases_lock_after_timeout(self):
         from desktop.cloud_client import CloudError
 

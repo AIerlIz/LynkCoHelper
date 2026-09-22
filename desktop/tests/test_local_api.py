@@ -84,6 +84,23 @@ class LocalAPITests(unittest.TestCase):
         self.assertTrue(json.loads(body)['data']['reset'])
         self.assertEqual(self.controller.public_state()['capture']['stage'], 'idle')
 
+    def test_clear_identity_route_clears_local_credential(self):
+        self.controller.claim('claim-token_123456')
+        status, body = self.request('/api/identity/clear', body={})
+
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)['data'], {'cleared': True})
+        self.assertFalse(self.controller.public_state()['hasIdentity'])
+
+    def test_force_stop_route_stops_desktop_proxy_without_phone_confirmation(self):
+        self.controller.proxy = Mock()
+        self.controller.proxy.public_state.side_effect = [{'running': True}, {'running': False}]
+        status, body = self.request('/api/capture/force-stop', body={})
+
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)['data']['stopped'], True)
+        self.controller.proxy.stop.assert_called_once_with()
+
     def test_retry_route_restarts_failed_verification_without_resending_credentials(self):
         self.controller.claim('claim-token_123456')
         self.controller.cloud.prepare_error = ValueError('raw token=mobile-token-secret')

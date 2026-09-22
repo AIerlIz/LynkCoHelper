@@ -133,11 +133,11 @@
                 </button>
               </div>
             </fieldset>
-            <label
+            <div class="network-picker"><label
               >电脑网络<select id="network" required>
                 <option value="">正在读取网络...</option>
-              </select></label
-            >
+              </select></label><button id="refresh-network" type="button" title="重新读取电脑网络" aria-label="重新读取电脑网络"><i data-lucide="refresh-cw"></i></button></div>
+            <label>手机代理端口<input id="proxy-port-input" type="number" min="1024" max="65535" value="55255" required /><small class="muted">手机 Wi-Fi 代理要填写这个端口；默认 55255，可按需修改。</small></label>
             <div class="binding-step-actions">
               <button id="bind-back" type="button" hidden><i data-lucide="arrow-left"></i>返回概览</button>
               <button type="submit" class="primary"><i data-lucide="wifi"></i>开始连接</button>
@@ -149,8 +149,9 @@
           <div class="connection-layout">
             <div>
               <h2>用手机扫码配对</h2>
-              <p class="muted">手机与电脑连接同一 Wi-Fi，保持手机代理关闭。</p>
+              <p class="muted">手机与电脑连接同一 Wi-Fi，保持手机代理关闭。换 Wi-Fi 后请重新生成二维码。</p>
               <p id="phone-paired" class="status"></p>
+              <p id="pairing-network-warning" class="notice" hidden>检测到电脑网络已变化，旧二维码已失效。请选择新的电脑网络并点击重新配对。</p>
             </div>
             <figure class="qr">
               <img id="pair-qr" alt="手机配对和证书下载二维码" width="176" height="176" />
@@ -161,6 +162,7 @@
             <h3 id="phone-instructions-title">iPhone 证书设置</h3>
             <p id="phone-instructions"></p>
             <p>已安装并信任本机证书，无需重复安装。</p>
+            <button id="refresh-pairing" type="button"><i data-lucide="refresh-cw"></i>换 Wi-Fi 后重新配对</button>
           </div>
           </div>
           <div id="proxy-step" hidden>

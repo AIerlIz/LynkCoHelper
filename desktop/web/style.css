@@ -307,6 +307,15 @@ section {
   gap: 20px;
   margin-top: 25px;
 }
+.network-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 40px;
+  gap: 8px;
+  align-items: end;
+}
+.network-picker > label {
+  min-width: 0;
+}
 .push-channel {
   min-width: 0;
   margin: 0;

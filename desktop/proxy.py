@@ -42,19 +42,33 @@ class ProxyManager:
         self.lock = threading.RLock()
         self.address = self.peer = self.pair_token = self.platform = None
         self.port = 0
+        self.last_activity_at = None
         self.capture_enabled = False
         self.state_path = self.root / 'proxy-state.json'
-        ports_path = self.root / 'ports.json'
-        if ports_path.exists():
-            ports = json.loads(ports_path.read_text())
+        self.ports_path = self.root / 'ports.json'
+        if self.ports_path.exists():
+            ports = json.loads(self.ports_path.read_text())
         else:
             ports = {'proxy': 55255, 'certificate': 55268}
-            ports_path.write_text(json.dumps(ports))
+            self.ports_path.write_text(json.dumps(ports))
             if os.name != 'nt':
-                ports_path.chmod(0o600)
+                self.ports_path.chmod(0o600)
         if any(type(ports.get(k)) is not int or not 1024 <= ports[k] <= 65535 for k in ('proxy', 'certificate')) or ports['proxy'] == ports['certificate']:
             raise ValueError('固定端口配置无效')
         self.fixed_ports = ports
+
+    def _save_ports(self):
+        self.ports_path.write_text(json.dumps(self.fixed_ports))
+        if os.name != 'nt':
+            self.ports_path.chmod(0o600)
+
+    def _proxy_port(self, value):
+        port = self.fixed_ports['proxy'] if value is None else value
+        if type(port) is not int or not 1024 <= port <= 65535:
+            raise ValueError('代理端口必须是 1024-65535 之间的数字')
+        if port == self.fixed_ports['certificate']:
+            raise ValueError('代理端口不能与证书下载端口相同')
+        return port
 
     def _write_state(self):
         temporary = self.state_path.with_suffix('.tmp')
@@ -72,13 +86,38 @@ class ProxyManager:
             self.capture_enabled = False
             self._write_state()
 
-    def start(self, address, platform):
+    def note_activity(self):
+        """Record a request accepted from the paired phone without retaining its data."""
+        with self.lock:
+            self.last_activity_at = int(time.time() * 1000)
+
+    def _active_connections(self):
+        if not self.port:
+            return 0
+        try:
+            connections = psutil.net_connections(kind='tcp')
+        except (OSError, psutil.AccessDenied):
+            return 0
+        active = 0
+        for connection in connections:
+            local = getattr(connection, 'laddr', None)
+            remote = getattr(connection, 'raddr', None)
+            local_port = getattr(local, 'port', local[1] if isinstance(local, tuple) and len(local) > 1 else None)
+            remote_host = getattr(remote, 'ip', remote[0] if isinstance(remote, tuple) and remote else None)
+            if (local_port == self.port and remote and remote_host == self.peer
+                    and getattr(connection, 'status', None) == 'ESTABLISHED'):
+                active += 1
+        return active
+
+    def start(self, address, platform, proxy_port=None):
         with self.lock:
             if self.process or self.server:
                 raise ValueError('已有手机连接流程，请先关闭手机代理并断开连接')
             if address not in {item['address'] for item in network_addresses()}:
                 raise ValueError('请选择当前电脑的 Wi-Fi 或有线网络地址')
-            for port in self.fixed_ports.values():
+            selected_proxy_port = self._proxy_port(proxy_port)
+            selected_ports = dict(self.fixed_ports, proxy=selected_proxy_port)
+            for port in selected_ports.values():
                 try:
                     with socket.socket() as probe:
                         probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -89,8 +128,9 @@ class ProxyManager:
             self.peer = None
             self.pair_token = secrets.token_urlsafe(24)
             self.capture_enabled = True
+            self.last_activity_at = None
             self._write_state()
-            self.port = self.fixed_ports['proxy']
+            self.port = selected_proxy_port
             addon = Path(__file__).with_name('capture_addon.py')
             command = [sys.executable] + ([] if getattr(sys, 'frozen', False) else ['-m', 'desktop.launcher'])
             command += ['--proxy', '--listen-host', address, '--listen-port', str(self.port), '-q',
@@ -170,7 +210,14 @@ class ProxyManager:
             except OSError:
                 self.stop()
                 raise ValueError('证书下载服务启动失败，请检查网络') from None
+            self.fixed_ports['proxy'] = selected_proxy_port
+            self._save_ports()
             return self.public_state()
+
+    def restart(self, address, platform, proxy_port=None):
+        """Rebind the local proxy after the computer changes Wi-Fi networks."""
+        self.stop()
+        return self.start(address, platform, proxy_port)
 
     def stop(self):
         with self.lock:
@@ -178,6 +225,7 @@ class ProxyManager:
             self.process = self.server = None
             self.capture_enabled = False
             self.peer = self.pair_token = None
+            self.last_activity_at = None
             self._write_state()
         if server:
             server.shutdown()
@@ -193,6 +241,19 @@ class ProxyManager:
     def public_state(self):
         with self.lock:
             running = bool(self.process and self.process.poll() is None)
-            return {'running': running, 'address': self.address, 'port': self.port, 'paired': bool(self.peer),
+            paired = bool(self.peer)
+            try:
+                network_changed = bool(running and self.address and self.address not in {
+                    item['address'] for item in network_addresses()
+                })
+            except OSError:
+                network_changed = False
+            active_connections = self._active_connections() if running and paired else 0
+            now = int(time.time() * 1000)
+            recent = bool(self.last_activity_at and now - self.last_activity_at <= 30_000)
+            phone_state = 'stopped' if not running else 'not_paired' if not paired else 'active' if active_connections else 'recent' if recent else 'idle'
+            return {'running': running, 'address': self.address, 'port': self.port or self.fixed_ports['proxy'], 'paired': paired,
+                    'phoneProxyState': phone_state, 'networkChanged': network_changed,
+                    'phoneRequests': {'active': active_connections, 'lastAt': self.last_activity_at},
                     'captureEnabled': self.capture_enabled and running,
                     'pairUrl': f'http://{self.address}:{self.server.server_port}/{self.pair_token}' if running and self.server else None}

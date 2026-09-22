@@ -52,8 +52,9 @@ def enable_windows_dpi_awareness():
 class ProgressUI:
     def __init__(self):
         self.root = self.label = self.detail = self.progress = None
-        self.backend_status = self.proxy_status = self.open_button = None
+        self.backend_status = self.proxy_status = self.open_button = self.clear_button = None
         self._runtime_refresh = None
+        self._runtime_stop = None
         self.cancelled = False
         # Release launchers always show a Tk window. Source and test runs keep
         # terminal output unless the UI is explicitly requested.
@@ -65,7 +66,7 @@ class ProgressUI:
             from tkinter import ttk
             self.root = tk.Tk()
             self.root.title('每日任务助手')
-            self.root.geometry('520x210')
+            self.root.geometry('640x250')
             self.root.resizable(False, False)
             self.root.protocol('WM_DELETE_WINDOW', self.request_close)
             self.root.lift()
@@ -92,6 +93,8 @@ class ProgressUI:
             self.proxy_status.pack(side='left', padx=(18, 0))
             self.open_button = ttk.Button(status, text='打开后台', state='disabled')
             self.open_button.pack(side='right')
+            self.clear_button = ttk.Button(status, text='清除本地登录态', state='disabled')
+            self.clear_button.pack(side='right', padx=(0, 8))
             self.root.update()
         except Exception:
             self.root = None
@@ -129,19 +132,57 @@ class ProgressUI:
             try:
                 runtime = self._runtime_refresh()
             except Exception:
-                self.detail.config(text='暂时无法确认手机代理状态，请稍后再关闭')
+                self.detail.config(text='无法自动读取手机 Wi-Fi 代理开关，请在网页完成断开后再关闭此窗口')
                 return
             proxy = runtime.get('proxy') if isinstance(runtime, dict) else None
             if isinstance(proxy, dict) and proxy.get('running') is True:
-                self.detail.config(text='手机代理仍在运行，请先关闭手机 Wi-Fi 代理并断开连接')
+                if getattr(self, '_runtime_stop', None):
+                    try:
+                        self._runtime_stop()
+                        runtime = self._runtime_refresh()
+                    except Exception:
+                        self.detail.config(text='电脑代理停止失败，请先在后台页面完成断开后再关闭此窗口')
+                        return
+                    proxy = runtime.get('proxy') if isinstance(runtime, dict) else None
+                    if not isinstance(proxy, dict) or proxy.get('running') is not True:
+                        self.detail.config(text='电脑代理已关闭；手机 Wi-Fi 代理设置仍需手动关闭')
+                        self.cancelled = True
+                        return
+                state = proxy.get('phoneProxyState')
+                if state in ('active', 'recent'):
+                    message = '检测到手机仍有代理请求，请先关闭手机 Wi-Fi 代理，再在网页点击“断开手机连接”'
+                else:
+                    message = '当前暂无手机请求，但电脑无法证明手机代理已关闭；请在网页完成“断开手机连接”后再关闭此窗口'
+                self.detail.config(text=message)
                 return
         self.cancelled = True
 
-    def set_runtime(self, url, refresh):
+    def set_runtime(self, url, refresh, clear=None, stop=None):
         self._runtime_refresh = refresh
+        self._runtime_stop = stop
         if self.open_button:
             self.open_button.config(command=lambda: open_page(url), state='normal')
+        if self.clear_button and clear:
+            self.clear_button.config(command=lambda: self.clear_identity(clear), state='normal')
         self.refresh_runtime()
+
+    def clear_identity(self, action):
+        if self.root:
+            from tkinter import messagebox
+            if not messagebox.askyesno('清除本地登录态', '将清除本机保存的云端登录凭证，云端账号绑定不会被删除。确定继续？', parent=self.root):
+                return
+        if self.clear_button:
+            self.clear_button.config(state='disabled')
+        try:
+            action()
+            if self.detail:
+                self.detail.config(text='本地登录态已清除；请在后台页面重新输入邀请码或恢复码')
+        except Exception as error:
+            if self.detail:
+                self.detail.config(text=f'清除失败：{error}')
+        finally:
+            if self.clear_button:
+                self.clear_button.config(state='normal')
 
     def refresh_runtime(self):
         if not self._runtime_refresh:
@@ -152,7 +193,17 @@ class ProgressUI:
         proxy = runtime.get('proxy') if isinstance(runtime, dict) else None
         running = isinstance(proxy, dict) and proxy.get('running') is True
         if self.proxy_status:
-            self.proxy_status.config(text='手机代理：运行中' if running else '手机代理：未运行')
+            if not running:
+                label = '手机请求：未开启'
+            elif proxy.get('phoneProxyState') == 'not_paired':
+                label = '手机请求：未配对'
+            elif proxy.get('phoneProxyState') == 'active':
+                label = '手机请求：有活动'
+            elif proxy.get('phoneProxyState') == 'recent':
+                label = '手机请求：刚有活动'
+            else:
+                label = '手机请求：暂无请求'
+            self.proxy_status.config(text=label)
         return runtime
 
     def _check_cancelled(self):
@@ -362,6 +413,26 @@ def local_status(url):
     result = json.loads(payload)
     if len(payload) > 65536 or not isinstance(result, dict) or result.get('ok') is not True:
         raise ValueError('本机客户端状态不可用')
+    return result.get('data') or {}
+
+
+def local_action(url, path, body=None):
+    parsed = urlsplit(url)
+    if parsed.scheme != 'http' or parsed.hostname not in {'127.0.0.1', 'localhost'} \
+            or not parsed.fragment or parsed.query:
+        raise ValueError('Invalid local client URL')
+    request_url = urlunsplit((parsed.scheme, parsed.netloc, path, '', ''))
+    request = Request(
+        request_url,
+        data=json.dumps(body or {}).encode(),
+        headers={'Authorization': 'Bearer ' + parsed.fragment, 'Content-Type': 'application/json'},
+        method='POST',
+    )
+    with build_opener(ProxyHandler({}), NoRedirect()).open(request, timeout=10) as response:
+        payload = response.read(65537)
+    result = json.loads(payload)
+    if len(payload) > 65536 or not isinstance(result, dict) or result.get('ok') is not True:
+        raise ValueError(result.get('error', '本机操作未完成') if isinstance(result, dict) else '本机操作未完成')
     return result.get('data') or {}
 
 
@@ -749,7 +820,12 @@ def main():
             raise RuntimeError('客户端启动后立即退出，请重新打开助手')
         instance = json.loads((state_root / 'instance.json').read_text())
         dashboard_url = instance['url']
-        ui.set_runtime(dashboard_url, lambda: local_status(dashboard_url))
+        ui.set_runtime(
+            dashboard_url,
+            lambda: local_status(dashboard_url),
+            lambda: local_action(dashboard_url, '/api/identity/clear'),
+            lambda: local_action(dashboard_url, '/api/capture/force-stop'),
+        )
         ui.phase('✅ 客户端已启动', '页面已打开；关闭浏览器不会退出助手，关闭此窗口将退出客户端')
         return wait_for_child(child, ui)
     except KeyboardInterrupt:
