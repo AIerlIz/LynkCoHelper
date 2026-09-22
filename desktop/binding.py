@@ -308,6 +308,8 @@ class Controller:
             with self.lock:
                 self.binding = self.session = self.candidate = None
                 self.runs = {'items': [], 'nextCursor': None}
+                self.platform = None
+                self.stage = 'idle'
                 self.verification_error = None
                 self.generation += 1
             self._refresh_schedule_windows()

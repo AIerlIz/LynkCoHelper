@@ -156,6 +156,43 @@ class BindingTests(unittest.TestCase):
         self.assertEqual(state['capture']['stage'], 'idle')
         self.assertIsNone(state['candidate'])
 
+    def test_activation_prevents_an_older_verification_from_publishing(self):
+        self.cloud.prepare_release.clear()
+        self.assertTrue(self.controller.receive_capture(SESSION))
+        self.assertTrue(self.cloud.prepare_started.wait(.5))
+        self.controller.candidate = {'id': 'previous-candidate', 'expiresAt': 9999999999999}
+        self.controller.activate({'label': 'car', 'scheduleTime': '08:00-10:00', 'doShare': False})
+        self.cloud.prepare_release.set()
+        time.sleep(.05)
+        state = self.controller.public_state()
+        self.assertEqual(state['capture']['stage'], 'cleanup')
+        self.assertIsNone(state['candidate'])
+
+    def test_identity_adoption_prevents_an_older_verification_from_publishing(self):
+        self.cloud.prepare_release.clear()
+        self.assertTrue(self.controller.receive_capture(SESSION))
+        self.assertTrue(self.cloud.prepare_started.wait(.5))
+        self.controller.register('admin-reset-token', recover=True)
+        self.cloud.prepare_release.set()
+        time.sleep(.05)
+        state = self.controller.public_state()
+        self.assertEqual(state['capture']['stage'], 'idle')
+        self.assertIsNone(state['candidate'])
+
+    def test_binding_deletion_clears_capture_state_and_blocks_stale_verification(self):
+        self.cloud.prepare_release.clear()
+        self.controller.binding = {'id': 'binding'}
+        self.assertTrue(self.controller.receive_capture(SESSION))
+        self.assertTrue(self.cloud.prepare_started.wait(.5))
+        self.controller.delete()
+        self.cloud.prepare_release.set()
+        time.sleep(.05)
+        state = self.controller.public_state()
+        self.assertEqual(state['capture']['stage'], 'idle')
+        self.assertIsNone(state['candidate'])
+        self.assertIsNone(state['capture']['platform'])
+        self.assertIsNone(state['capture']['verificationError'])
+
     def test_slot_counts_are_cached_locally_until_explicit_refresh(self):
         self.assertEqual(self.controller.public_state()['scheduleWindows']['items'][0]['remaining'],9)
         before = len(self.cloud.calls)
