@@ -102,8 +102,16 @@ class Controller:
                 if not token or len(token) > 128 or not all(char.isalnum() or char in '-_' for char in token):
                     raise ValueError('恢复链接格式无效')
                 payload = {'recoveryToken': token}
-            identity = self.cloud.request('POST', '/v1/users/recover', payload)
-            return self._adopt_identity(identity)
+            snapshot, version = self._freeze_capture()
+            try:
+                identity = self.cloud.request('POST', '/v1/users/recover', payload)
+                result = self._adopt_identity(identity)
+            except Exception:
+                self._restore_capture(snapshot, version)
+                raise
+            if not result['saved']:
+                self._restore_capture(snapshot, version)
+            return result
 
     def claim(self, claim_code):
         """Redeem an invitation code, accepting legacy full claim links."""
@@ -125,8 +133,16 @@ class Controller:
                 raise ValueError('邀请码格式无效')
             if self.identity:
                 raise ValueError('当前设备已经连接云端')
-            identity = self.cloud.request('POST', '/v1/claim/' + token, {})
-            return self._adopt_identity(identity)
+            snapshot, version = self._freeze_capture()
+            try:
+                identity = self.cloud.request('POST', '/v1/claim/' + token, {})
+                result = self._adopt_identity(identity)
+            except Exception:
+                self._restore_capture(snapshot, version)
+                raise
+            if not result['saved']:
+                self._restore_capture(snapshot, version)
+            return result
 
     def reset_capture(self):
         """Discard a stale local binding flow before replacing an account."""
@@ -153,12 +169,49 @@ class Controller:
             self.identity = saved
             self.session = self.candidate = self.binding = None
             self.runs = {'items': [], 'nextCursor': None}
+            self.capture_events = []
             self.generation += 1
             self.stage = 'idle'
+            self.platform = None
             self.verification_error = None
             self.error = None
         self._refresh_schedule_windows()
         return {'recoveryCode': recovery, 'saved': True}
+
+    def _freeze_capture(self):
+        """Block a long-running account action from racing an active verification."""
+        with self.lock:
+            snapshot = {
+                'session': copy.deepcopy(self.session),
+                'candidate': copy.deepcopy(self.candidate),
+                'stage': self.stage,
+                'platform': self.platform,
+                'verification_error': self.verification_error,
+                'capture_events': copy.deepcopy(self.capture_events),
+            }
+            self.generation += 1
+            version = self.generation
+            self.candidate = None
+            self.stage = 'cleanup'
+            self.verification_error = None
+            return snapshot, version
+
+    def _restore_capture(self, snapshot, version):
+        """Restore a cancelled account action without reviving its old worker."""
+        with self.lock:
+            if self.generation != version:
+                return
+            self.session = snapshot['session']
+            self.platform = snapshot['platform']
+            self.capture_events = snapshot['capture_events']
+            if snapshot['stage'] == 'verifying':
+                self.candidate = None
+                self.stage = 'verification_failed'
+                self.verification_error = '个人信息验证已中断，请重试'
+                return
+            self.candidate = snapshot['candidate']
+            self.stage = snapshot['stage']
+            self.verification_error = snapshot['verification_error']
 
     def receive_capture(self, session):
         if not isinstance(session, dict) or session.get('platform') not in ('IOS', 'ANDROID'):
@@ -304,14 +357,21 @@ class Controller:
 
     def delete(self):
         with self.operation:
-            result = self._request('DELETE', '/v1/binding')
+            snapshot, version = self._freeze_capture()
+            try:
+                result = self._request('DELETE', '/v1/binding')
+            except Exception:
+                self._restore_capture(snapshot, version)
+                raise
             with self.lock:
-                self.binding = self.session = self.candidate = None
+                self.binding = None
                 self.runs = {'items': [], 'nextCursor': None}
-                self.platform = None
-                self.stage = 'idle'
-                self.verification_error = None
-                self.generation += 1
+                if self.generation == version:
+                    self.session = self.candidate = None
+                    self.capture_events = []
+                    self.platform = None
+                    self.stage = 'idle'
+                    self.verification_error = None
             self._refresh_schedule_windows()
             return result
 

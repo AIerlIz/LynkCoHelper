@@ -24,13 +24,26 @@ class FakeCloud:
         self.prepare_release.set()
         self.prepare_gates = {}
         self.prepare_error = None
+        self.action_started = {}
+        self.action_gates = {}
+        self.action_errors = {}
         self.base_url = 'https://lynkco.ltools.asia'
+
+    def wait_for_action(self, path):
+        self.action_started.setdefault(path, threading.Event()).set()
+        gate = self.action_gates.get(path)
+        if gate:
+            gate.wait(2)
+        error = self.action_errors.get(path)
+        if error:
+            raise error
 
     def request(self, method, path, body=None, token=None):
         self.calls.append((method, path, body))
         if path.startswith('/v1/claim/'):
             return dict(userId='owner', managementToken='management-secret', recoveryCode='recovery-secret')
         if path == '/v1/users/recover':
+            self.wait_for_action(path)
             if body and body.get('recoveryToken') == 'admin-reset-token':
                 return dict(userId='owner', managementToken='new-management', recoveryCode='new-recovery')
             return dict(userId='owner', managementToken='management-secret', recoveryCode='recovery-secret')
@@ -46,6 +59,9 @@ class FakeCloud:
                         preview=dict(points='10', alreadySigned=True), capabilities=dict(share=False))
         if path.endswith('/activate'):
             return dict(id='binding', label='car', status='active', doShare=False, canShare=False, scheduleTime='08:10', nextRunAt=0)
+        if path == '/v1/binding' and method == 'DELETE':
+            self.wait_for_action(path)
+            return {'deleted': True}
         if path.endswith('/runs'):
             return dict(items=[], nextCursor=None)
         if path == '/health':
@@ -180,18 +196,74 @@ class BindingTests(unittest.TestCase):
         self.assertIsNone(state['candidate'])
 
     def test_binding_deletion_clears_capture_state_and_blocks_stale_verification(self):
+        delete_release = threading.Event()
+        self.cloud.action_gates['/v1/binding'] = delete_release
         self.cloud.prepare_release.clear()
         self.controller.binding = {'id': 'binding'}
+        self.controller.record_capture({'host': 'app-services.lynkco.com.cn', 'path': '/auth/login/refresh',
+                                        'method': 'POST', 'status': 200, 'outcome': 'captured', 'id': 'deadbeef',
+                                        'fields': {'token': True, 'refreshToken': True, 'deviceId': True, 'platform': True}})
         self.assertTrue(self.controller.receive_capture(SESSION))
         self.assertTrue(self.cloud.prepare_started.wait(.5))
-        self.controller.delete()
+        thread = threading.Thread(target=self.controller.delete)
+        thread.start()
+        self.assertTrue(self.cloud.action_started['/v1/binding'].wait(.5))
         self.cloud.prepare_release.set()
         time.sleep(.05)
+        self.assertEqual(self.controller.public_state()['capture']['stage'], 'cleanup')
+        delete_release.set()
+        thread.join(1)
+        self.assertFalse(thread.is_alive())
         state = self.controller.public_state()
         self.assertEqual(state['capture']['stage'], 'idle')
         self.assertIsNone(state['candidate'])
         self.assertIsNone(state['capture']['platform'])
         self.assertIsNone(state['capture']['verificationError'])
+        self.assertEqual(state['capture']['events'], [])
+
+    def test_recovery_freezes_verification_before_the_remote_action_completes(self):
+        recovery_release = threading.Event()
+        self.cloud.action_gates['/v1/users/recover'] = recovery_release
+        self.cloud.prepare_release.clear()
+        self.assertTrue(self.controller.receive_capture(SESSION))
+        self.assertTrue(self.cloud.prepare_started.wait(.5))
+        thread = threading.Thread(target=lambda: self.controller.register('admin-reset-token', recover=True))
+        thread.start()
+        self.assertTrue(self.cloud.action_started['/v1/users/recover'].wait(.5))
+        self.cloud.prepare_release.set()
+        time.sleep(.05)
+        self.assertEqual(self.controller.public_state()['capture']['stage'], 'cleanup')
+        recovery_release.set()
+        thread.join(1)
+        self.assertFalse(thread.is_alive())
+        state = self.controller.public_state()
+        self.assertEqual(state['capture']['stage'], 'idle')
+        self.assertIsNone(state['candidate'])
+
+    def test_failed_recovery_restores_a_retryable_capture_state(self):
+        self.cloud.prepare_release.clear()
+        self.cloud.action_errors['/v1/users/recover'] = ValueError('fixture recovery failure')
+        self.assertTrue(self.controller.receive_capture(SESSION))
+        self.assertTrue(self.cloud.prepare_started.wait(.5))
+        with self.assertRaisesRegex(ValueError, 'fixture recovery failure'):
+            self.controller.register('admin-reset-token', recover=True)
+        self.cloud.prepare_release.set()
+        state = self.wait_for_stage('verification_failed')
+        self.assertIsNone(state['candidate'])
+        self.assertEqual(state['capture']['verificationError'], '个人信息验证已中断，请重试')
+
+    def test_failed_deletion_restores_a_retryable_capture_state(self):
+        self.cloud.prepare_release.clear()
+        self.cloud.action_errors['/v1/binding'] = ValueError('fixture delete failure')
+        self.controller.binding = {'id': 'binding'}
+        self.assertTrue(self.controller.receive_capture(SESSION))
+        self.assertTrue(self.cloud.prepare_started.wait(.5))
+        with self.assertRaisesRegex(ValueError, 'fixture delete failure'):
+            self.controller.delete()
+        self.cloud.prepare_release.set()
+        state = self.wait_for_stage('verification_failed')
+        self.assertEqual(state['capture']['verificationError'], '个人信息验证已中断，请重试')
+        self.assertIsNone(state['candidate'])
 
     def test_slot_counts_are_cached_locally_until_explicit_refresh(self):
         self.assertEqual(self.controller.public_state()['scheduleWindows']['items'][0]['remaining'],9)
