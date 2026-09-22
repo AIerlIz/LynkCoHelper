@@ -87,7 +87,14 @@ jobs:
           Start-Sleep -Seconds 2
           if ($process.HasExited) { throw 'Windows desktop package exited during smoke check.' }
           Stop-Process -Id $process.Id -Force
-          $mt = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Recurse -Filter mt.exe | Select-Object -First 1 -ExpandProperty FullName
+          $mt = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Recurse -Filter mt.exe |
+            Where-Object { $_.FullName -match '\\x64\\mt\.exe$' } |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $mt) {
+            $mt = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Recurse -Filter mt.exe |
+              Where-Object { $_.FullName -notmatch '\\arm64\\mt\.exe$' } |
+              Select-Object -First 1 -ExpandProperty FullName
+          }
           if (-not $mt) { throw 'Windows manifest tool is unavailable.' }
           $embedded = Join-Path $env:RUNNER_TEMP 'lynkco-desktop-package.manifest'
           & $mt "-inputresource:$package;#1" "-out:$embedded"
@@ -111,7 +118,14 @@ jobs:
           Wait-Process -Id $process.Id -Timeout 10 -ErrorAction SilentlyContinue
           $process.Refresh()
           if (-not $process.HasExited) { throw 'Windows release bootstrap did not terminate.' }
-          $mt = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Recurse -Filter mt.exe | Select-Object -First 1 -ExpandProperty FullName
+          $mt = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Recurse -Filter mt.exe |
+            Where-Object { $_.FullName -match '\\x64\\mt\.exe$' } |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $mt) {
+            $mt = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Recurse -Filter mt.exe |
+              Where-Object { $_.FullName -notmatch '\\arm64\\mt\.exe$' } |
+              Select-Object -First 1 -ExpandProperty FullName
+          }
           if (-not $mt) { throw 'Windows manifest tool is unavailable.' }
           $embedded = Join-Path $env:RUNNER_TEMP 'lynkco-release-bootstrap.manifest'
           & $mt "-inputresource:$bootstrap;#1" "-out:$embedded"

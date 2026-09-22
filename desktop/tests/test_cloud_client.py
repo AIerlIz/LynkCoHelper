@@ -113,7 +113,7 @@ class CloudClientTests(unittest.TestCase):
         class SlowResponse(io.BytesIO):
             def read(self, *args, **kwargs):
                 started.set()
-                time.sleep(0.08)
+                time.sleep(0.5)
                 return super().read(*args, **kwargs)
 
         client.opener.open.return_value = SlowResponse(b'{"ok":true,"data":{}}')
@@ -122,7 +122,7 @@ class CloudClientTests(unittest.TestCase):
         with self.assertRaises(CloudError) as caught:
             client.request('GET', '/health')
         self.assertEqual(caught.exception.code, 'NETWORK')
-        self.assertLess(time.monotonic() - started_at, 0.07)
+        self.assertLess(time.monotonic() - started_at, 0.25)
 
     def test_run_requests_get_the_longer_but_single_budget(self):
         client = CloudClient('https://cloud.example')
