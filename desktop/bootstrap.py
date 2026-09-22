@@ -664,16 +664,19 @@ def main():
     record.write_text(json.dumps([owner]))
     child = None
     ui = ProgressUI()
+    stop_file = session / 'stop'
     def stop(signum, frame):
         raise KeyboardInterrupt
     signal.signal(signal.SIGTERM, stop)
-    detached = False
     try:
         ui.phase('🔍 正在检查版本', '正在检查本地客户端资源')
         executable = run_worker(
             lambda events: prepare_launch(base, session, URL, SHA256, EXECUTABLE, events), ui
         )
-        child = subprocess.Popen([str(executable), '--release-sha', SHA256])
+        child = subprocess.Popen([
+            str(executable), '--bootstrap-parent', json.dumps(owner), '--bootstrap-stop', str(stop_file),
+            '--release-sha', SHA256,
+        ])
         try:
             record.write_text(json.dumps([owner, identity(child.pid)]))
         except psutil.NoSuchProcess:
@@ -681,10 +684,8 @@ def main():
         ui.phase('🚀 正在启动客户端', '正在打开客户端页面，请稍候')
         if not wait_for_child_start(child, state_root, SHA256, ui):
             raise RuntimeError('客户端启动后立即退出，请重新打开助手')
-        detached = True
-        ui.phase('✅ 客户端已启动', '客户端页面已打开，启动器将自动关闭')
-        time.sleep(.25)
-        return 0
+        ui.phase('✅ 客户端已启动', '页面已打开；关闭浏览器不会退出助手，关闭此窗口将退出客户端')
+        return wait_for_child(child, ui)
     except KeyboardInterrupt:
         return 130
     except Exception as error:
@@ -693,7 +694,8 @@ def main():
             input('Press Enter to close.')
         return 1
     finally:
-        if child is not None and not detached and child.poll() is None:
+        if child is not None and child.poll() is None:
+            stop_file.touch()
             try:
                 child.wait(timeout=15)
             except subprocess.TimeoutExpired:

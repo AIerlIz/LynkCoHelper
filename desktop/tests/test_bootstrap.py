@@ -589,11 +589,12 @@ class BootstrapTests(unittest.TestCase):
                 patch('desktop.bootstrap.signal.signal'), patch('desktop.bootstrap.subprocess.Popen') as launch, \
                 patch('desktop.bootstrap.wait_for_child_start', return_value=True):
             launch.return_value.pid = os.getpid()
+            launch.return_value.wait.return_value = 0
             launch.return_value.poll.return_value = 0
             self.assertEqual(main(), 0)
             command = launch.call_args.args[0]
-            self.assertNotIn('--bootstrap-parent', command)
-            self.assertNotIn('--bootstrap-stop', command)
+            self.assertIn('--bootstrap-parent', command)
+            self.assertIn('--bootstrap-stop', command)
         downloads = self.root / 'LynkCoHelper/downloads'
         self.assertEqual(list(downloads.glob('session-*')), [])
         self.assertEqual((downloads / 'cache' / f'{digest}.tar.gz').read_bytes(), payload)
