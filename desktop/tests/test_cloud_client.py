@@ -139,7 +139,7 @@ class CloudClientTests(unittest.TestCase):
         client.request('GET', '/health', deadline=time.monotonic() + 0.02)
         timeout = client.opener.open.call_args.kwargs['timeout']
         self.assertGreater(timeout, 0)
-        self.assertLess(timeout, 0.02)
+        self.assertLessEqual(timeout, 0.02)
 
     @patch('desktop.cloud_client.build_opener')
     @patch('desktop.cloud_client.ssl.create_default_context')

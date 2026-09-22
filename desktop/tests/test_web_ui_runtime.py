@@ -71,7 +71,7 @@ class WebUIRuntimeTests(unittest.TestCase):
               global.clearInterval = (timer) => {{ if (timer) {{ timer.active = false; cleared.push(timer); }} }};
               global.fetch = fetchImpl;
               const source = autoStart ? appSource : appSource.replace(
-                "  start();\\n})();",
+                /  start\\(\\);\\r?\\n\\}\\)\\(\\);/,
                 "  global.__desktopTest = {{ poll, setState: (next) => {{ state = next; }} }};\\n})();",
               );
               eval(source);
