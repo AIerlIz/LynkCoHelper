@@ -11,7 +11,7 @@
     platform = "IOS",
     busy = false;
   let proxyConfirmed = false, selectedBindingStep = null, activePair = null;
-  let verifiedCandidateKey = null, identityError = "", localDisconnected = !token, quitting = false;
+  let verifiedCandidateKey = null, identityError = "", localDisconnected = !token, quitting = false, terminated = false;
   let qrUrl = null,
     qrPair = null,
     settingsVersion = "",
@@ -1021,7 +1021,8 @@
     setButtonLoading(button, true, "退出中");
     try {
       await api("/api/quit", {});
-      clearInterval(pollTimer);
+      terminated = true;
+      stopPolling();
       localDisconnected = true;
       renderDisconnectedState();
       notice("助手已退出，可以关闭此页面。", true);
@@ -1035,7 +1036,8 @@
           : error.message || "退出未完成，请重试。",
       );
       if (localDisconnected) {
-        clearInterval(pollTimer);
+        terminated = true;
+        stopPolling();
         document
           .querySelectorAll("button")
           .forEach((item) => (item.disabled = true));
@@ -1047,16 +1049,25 @@
       setButtonLoading(button, false);
     }
   });
-  let pollTimer;
+  let pollTimer = null;
+  const isTerminating = () => quitting || terminated;
+  function stopPolling() {
+    if (pollTimer != null) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  }
   async function poll() {
-    if (busy || document.hidden) return;
+    if (busy || document.hidden || isTerminating()) return;
     try {
       const next = await api("/api/status");
+      if (isTerminating()) return;
       if (JSON.stringify(next) !== JSON.stringify(state)) {
         state = next;
         render();
       }
     } catch (error) {
+      if (isTerminating()) return;
       notice(error.message);
     }
   }
@@ -1079,8 +1090,10 @@
       return;
     }
     await poll();
+    if (isTerminating()) return;
     try {
       const networks = await api("/api/networks");
+      if (isTerminating()) return;
       $("network").replaceChildren();
       networks.forEach((item) => {
         const option = document.createElement("option");
@@ -1095,12 +1108,25 @@
         $("network").append(option);
       }
     } catch (error) {
+      if (isTerminating()) return;
       notice(error.message);
     }
-    await perform(() => api("/api/refresh", {}));
+    if (isTerminating()) return;
+    try {
+      await api("/api/refresh", {});
+      if (isTerminating()) return;
+      state = await api("/api/status");
+      if (isTerminating()) return;
+      render();
+    } catch (error) {
+      if (isTerminating()) return;
+      notice(error.message);
+    }
+    if (isTerminating()) return;
     if (state?.proxy.running) navigate("bind");
+    if (isTerminating()) return;
     pollTimer = setInterval(() => {
-      if (state?.proxy.running) poll();
+      if (!isTerminating() && state?.proxy.running) poll();
     }, 2000);
   }
   start();
