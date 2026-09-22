@@ -9,7 +9,7 @@
     view = "overview",
     identityMode = "claim",
     platform = "IOS",
-    busy = false;
+    activeOperations = 0;
   let proxyConfirmed = false, selectedBindingStep = null, activePair = null;
   let verifiedCandidateKey = null, identityError = "", localDisconnected = !token, quitting = false, terminated = false;
   let qrUrl = null,
@@ -206,7 +206,7 @@
           ...(body === undefined ? {} : { "Content-Type": "application/json" }),
         },
         body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(path === "/api/binding/run" ? 160000 : 60000),
+        signal: AbortSignal.timeout(path === "/api/binding/run" ? 130000 : 45000),
       });
     } catch (error) {
       localDisconnected = true;
@@ -242,13 +242,13 @@
     }
   }
   async function perform(operation, message, trigger, loadingLabel) {
-    if (busy) return;
-    busy = true;
-    const buttons = [...document.querySelectorAll("button")];
-    const disabled = new Map(buttons.map((button) => [button, button.disabled]));
     const activeButton = trigger?.closest?.("button") || document.activeElement?.closest?.("button");
+    if (activeButton?.dataset.operationBusy === "true") return;
+    const wasDisabled = activeButton?.disabled;
+    activeOperations += 1;
+    if (activeButton) activeButton.dataset.operationBusy = "true";
     setButtonLoading(activeButton, true, loadingLabel);
-    buttons.forEach((button) => (button.disabled = true));
+    if (activeButton) activeButton.disabled = true;
     try {
       await operation();
       if (message) notice(message, true);
@@ -275,9 +275,12 @@
         setIdentityError("邀请码或恢复码无法使用，请核对后重试。");
       }
     } finally {
-      busy = false;
-      buttons.forEach((button) => (button.disabled = disabled.get(button)));
       setButtonLoading(activeButton, false);
+      if (activeButton) {
+        activeButton.disabled = wasDisabled;
+        delete activeButton.dataset.operationBusy;
+      }
+      activeOperations -= 1;
       if (state) render();
     }
   }
@@ -1060,7 +1063,7 @@
     }
   }
   async function poll() {
-    if (busy || document.hidden || isTerminating()) return;
+    if (activeOperations > 0 || document.hidden || isTerminating()) return;
     try {
       const next = await api("/api/status");
       if (isTerminating()) return;
@@ -1071,6 +1074,7 @@
     } catch (error) {
       if (isTerminating()) return;
       notice(error.message);
+      render();
     }
   }
   async function start() {
@@ -1112,6 +1116,7 @@
     } catch (error) {
       if (isTerminating()) return;
       notice(error.message);
+      if (state) render();
     }
     if (isTerminating()) return;
     try {
@@ -1123,6 +1128,7 @@
     } catch (error) {
       if (isTerminating()) return;
       notice(error.message);
+      if (state) render();
     }
     if (isTerminating()) return;
     if (state?.proxy.running) navigate("bind");

@@ -24,6 +24,10 @@ class CloudError(ValueError):
 
 
 class CloudClient:
+    NORMAL_TIMEOUT = 35
+    RUN_TIMEOUT = 120
+    MAX_RESPONSE_BYTES = 262144
+
     def __init__(self, base_url):
         parsed = urlsplit(base_url)
         if (parsed.scheme != 'https' and not (parsed.scheme == 'http' and parsed.hostname in {'127.0.0.1', 'localhost'})) or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ('', '/'):
@@ -52,23 +56,34 @@ class CloudClient:
                 headers['Idempotency-Key'] = self.keys.setdefault(digest, (str(uuid.uuid4()), now))[0]
         request = Request(self.base_url + path, data=data, headers=headers, method=method)
         try:
-            timeout = 150 if method == 'POST' and path == '/v1/binding/runs' else 40
-            try:
-                response = self.opener.open(request, timeout=timeout)
-            except HTTPError as error:
-                response = error
-            except (URLError, OSError, TimeoutError):
-                if self.loopback:
-                    raise
+            deadline = time.monotonic() + self._timeout_budget(method, path)
+            last_error = None
+            openers = (self.opener,) if self.loopback else (self.opener, self.direct_opener)
+            payload = None
+            for index, opener in enumerate(openers):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
                 try:
-                    response = self.direct_opener.open(request, timeout=timeout)
+                    response = opener.open(request, timeout=remaining)
                 except HTTPError as error:
                     response = error
-            with response:
-                payload = response.read(262145)
-                if len(payload) > 262144:
-                    raise ValueError()
-                result = json.loads(payload)
+                except (URLError, OSError, TimeoutError) as error:
+                    last_error = error
+                    continue
+                try:
+                    with response:
+                        payload = self._read_response(response, deadline)
+                    break
+                except (URLError, OSError, TimeoutError) as error:
+                    last_error = error
+                    if index + 1 >= len(openers):
+                        raise
+            if payload is None:
+                raise last_error or TimeoutError()
+            if len(payload) > self.MAX_RESPONSE_BYTES:
+                raise ValueError()
+            result = json.loads(payload)
             if not isinstance(result, dict) or not isinstance(result.get('ok'), bool):
                 raise ValueError()
         except (URLError, OSError, TimeoutError):
@@ -107,3 +122,30 @@ class CloudClient:
             with self.lock:
                 self.keys.pop(digest, None)
         return result.get('data')
+
+    @classmethod
+    def _timeout_budget(cls, method, path):
+        return cls.RUN_TIMEOUT if method == 'POST' and path == '/v1/binding/runs' else cls.NORMAL_TIMEOUT
+
+    @staticmethod
+    def _read_response(response, deadline):
+        """Read a response without allowing a slow body to exceed the request budget."""
+        payload, errors = [], []
+
+        def read_body():
+            try:
+                payload.append(response.read(CloudClient.MAX_RESPONSE_BYTES + 1))
+            except Exception as error:  # pragma: no cover - socket implementations vary
+                errors.append(error)
+
+        worker = threading.Thread(target=read_body, daemon=True)
+        worker.start()
+        worker.join(max(0, deadline - time.monotonic()))
+        if worker.is_alive():
+            close = getattr(response, 'close', None)
+            if close:
+                close()
+            raise TimeoutError()
+        if errors:
+            raise errors[0]
+        return payload[0] if payload else b''

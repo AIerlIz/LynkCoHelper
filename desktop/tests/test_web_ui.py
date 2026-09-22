@@ -105,6 +105,24 @@ class WebUIContractTests(unittest.TestCase):
         self.assertIn('.is-loading', CSS)
         self.assertIn('@keyframes button-spin', CSS)
 
+    def test_cloud_and_browser_deadlines_leave_backend_time_to_reply(self):
+        self.assertIn('AbortSignal.timeout(path === "/api/binding/run" ? 130000 : 45000)', JS)
+        self.assertNotIn('AbortSignal.timeout(path === "/api/binding/run" ? 160000 : 60000)', JS)
+
+    def test_only_the_initiating_control_becomes_busy(self):
+        perform_start = JS.index('async function perform(')
+        perform_end = JS.index('  function navigate(', perform_start)
+        handler = JS[perform_start:perform_end]
+        self.assertIn('activeOperations', handler)
+        self.assertIn('operationBusy', handler)
+        self.assertNotIn('buttons.forEach((button) => (button.disabled = true))', handler)
+
+    def test_startup_keeps_local_state_visible_when_cloud_refresh_fails(self):
+        start = JS[JS.index('async function start()'):]
+        self.assertIn('await poll()', start)
+        refresh_failure = start[start.index('try {\n      await api("/api/refresh"'):]
+        self.assertIn('render();', refresh_failure)
+
     def test_binding_actions_wrap_without_overlapping(self):
         self.assertIn('class="binding-step-actions"', HTML)
         self.assertIn('id="bind-back"', HTML)

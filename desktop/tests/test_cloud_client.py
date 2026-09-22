@@ -1,6 +1,7 @@
 import json
 import io
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import Mock, patch
@@ -78,6 +79,58 @@ class CloudClientTests(unittest.TestCase):
 
         client.opener.open.assert_called_once()
         client.direct_opener.open.assert_called_once()
+
+    def test_proxy_and_direct_fallback_share_one_remaining_budget(self):
+        client = CloudClient('https://cloud.example')
+        client.opener = Mock()
+        client.direct_opener = Mock()
+        observed = []
+
+        def proxy_open(request, timeout):
+            observed.append(('proxy', timeout))
+            time.sleep(0.02)
+            raise URLError('proxy unavailable')
+
+        def direct_open(request, timeout):
+            observed.append(('direct', timeout))
+            return io.BytesIO(b'{"ok":true,"data":{"value":1}}')
+
+        client.opener.open.side_effect = proxy_open
+        client.direct_opener.open.side_effect = direct_open
+
+        self.assertEqual(client.request('GET', '/health'), {'value': 1})
+        self.assertEqual([item[0] for item in observed], ['proxy', 'direct'])
+        self.assertLess(observed[1][1], observed[0][1])
+        self.assertLessEqual(observed[0][1], 35)
+
+    def test_read_timeout_does_not_extend_the_shared_budget(self):
+        client = CloudClient('https://cloud.example')
+        client.opener = Mock()
+        client.direct_opener = Mock()
+        started = threading.Event()
+
+        class SlowResponse(io.BytesIO):
+            def read(self, *args, **kwargs):
+                started.set()
+                time.sleep(0.08)
+                return super().read(*args, **kwargs)
+
+        client.opener.open.return_value = SlowResponse(b'{"ok":true,"data":{}}')
+        client._timeout_budget = lambda method, path: 0.02
+        started_at = time.monotonic()
+        with self.assertRaises(CloudError) as caught:
+            client.request('GET', '/health')
+        self.assertEqual(caught.exception.code, 'NETWORK')
+        self.assertLess(time.monotonic() - started_at, 0.07)
+
+    def test_run_requests_get_the_longer_but_single_budget(self):
+        client = CloudClient('https://cloud.example')
+        client.opener = Mock()
+        client.opener.open.return_value = io.BytesIO(b'{"ok":true,"data":{}}')
+        client.request('POST', '/v1/binding/runs', {})
+        timeout = client.opener.open.call_args.kwargs['timeout']
+        self.assertLessEqual(timeout, 120)
+        self.assertGreater(timeout, 119)
 
     @patch('desktop.cloud_client.build_opener')
     @patch('desktop.cloud_client.ssl.create_default_context')
