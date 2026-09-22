@@ -9,6 +9,8 @@ from desktop.capture import clean_string
 
 
 class Controller:
+    OPERATION_TIMEOUT = 35
+
     def __init__(self, cloud, store):
         self.cloud, self.store = cloud, store
         self.lock = threading.RLock()
@@ -35,9 +37,12 @@ class Controller:
         self.schedule_windows = None
         self.schedule_windows_error = None
 
-    def _refresh_schedule_windows(self):
+    def _operation_deadline(self):
+        return time.monotonic() + self.OPERATION_TIMEOUT
+
+    def _refresh_schedule_windows(self, deadline=None):
         try:
-            result = self._request('GET', '/v1/schedule-windows') if self.identity else None
+            result = self._request('GET', '/v1/schedule-windows', deadline=deadline) if self.identity else None
             if self.identity and (not isinstance(result, dict) or not isinstance(result.get('items'), list)):
                 raise ValueError('暂时无法查询区间名额，请刷新后重试')
             with self.lock:
@@ -76,13 +81,27 @@ class Controller:
                 self.capture_events = [e for e in self.capture_events if e.get('id') != event['id']]
             self.capture_events = (self.capture_events + [event])[-200:]
 
-    def _request(self, method, path, body=None):
+    def _cloud_request(self, method, path, body=None, token=None, deadline=None):
+        if deadline is not None and deadline <= time.monotonic():
+            raise ValueError('云端请求超时，请稍后重试')
+        if deadline is None:
+            return self.cloud.request(method, path, body, token)
+        try:
+            return self.cloud.request(method, path, body, token, deadline=deadline)
+        except TypeError as error:
+            # Test doubles and third-party integrations before deadline support keep working.
+            if 'deadline' not in str(error):
+                raise
+            return self.cloud.request(method, path, body, token)
+
+    def _request(self, method, path, body=None, deadline=None):
         if not self.identity:
             raise ValueError('请先输入邀请码或恢复码')
-        return self.cloud.request(method, path, body, self.identity['managementToken'])
+        return self._cloud_request(method, path, body, self.identity['managementToken'], deadline)
 
     def register(self, code, recover=False):
         with self.operation:
+            deadline = self._operation_deadline()
             code = clean_string(code, 512)
             if not code:
                 raise ValueError('请输入有效的邀请码或恢复码')
@@ -104,8 +123,8 @@ class Controller:
                 payload = {'recoveryToken': token}
             snapshot, version = self._freeze_capture()
             try:
-                identity = self.cloud.request('POST', '/v1/users/recover', payload)
-                result = self._adopt_identity(identity)
+                identity = self._cloud_request('POST', '/v1/users/recover', payload, deadline=deadline)
+                result = self._adopt_identity(identity, deadline)
             except Exception:
                 self._restore_capture(snapshot, version)
                 raise
@@ -116,6 +135,7 @@ class Controller:
     def claim(self, claim_code):
         """Redeem an invitation code, accepting legacy full claim links."""
         with self.operation:
+            deadline = self._operation_deadline()
             value = clean_string(claim_code, 2048)
             if not value:
                 raise ValueError('请输入有效的邀请码')
@@ -135,8 +155,8 @@ class Controller:
                 raise ValueError('当前设备已经连接云端')
             snapshot, version = self._freeze_capture()
             try:
-                identity = self.cloud.request('POST', '/v1/claim/' + token, {})
-                result = self._adopt_identity(identity)
+                identity = self._cloud_request('POST', '/v1/claim/' + token, {}, deadline=deadline)
+                result = self._adopt_identity(identity, deadline)
             except Exception:
                 self._restore_capture(snapshot, version)
                 raise
@@ -157,7 +177,7 @@ class Controller:
                 self.generation += 1
             return {'reset': True}
 
-    def _adopt_identity(self, identity):
+    def _adopt_identity(self, identity, deadline=None):
         recovery = identity['recoveryCode']
         saved = {key: identity[key] for key in ('userId', 'managementToken')}
         # Preserve the recovery code in the explicit response even if the OS vault denies access.
@@ -175,7 +195,7 @@ class Controller:
             self.platform = None
             self.verification_error = None
             self.error = None
-        self._refresh_schedule_windows()
+        self._refresh_schedule_windows(deadline)
         return {'recoveryCode': recovery, 'saved': True}
 
     def _freeze_capture(self):
@@ -286,6 +306,7 @@ class Controller:
 
     def activate(self, settings):
         with self.operation:
+            deadline = self._operation_deadline()
             with self.lock:
                 candidate = self.candidate
                 if not candidate or candidate['expiresAt'] <= time.time() * 1000:
@@ -296,13 +317,13 @@ class Controller:
                 # Freeze capture during activation so a second phone flow cannot replace the preview.
                 self.stage = 'cleanup'
             try:
-                binding = self._request('POST', '/v1/binding-candidates/' + candidate['id'] + '/activate', settings)
+                binding = self._request('POST', '/v1/binding-candidates/' + candidate['id'] + '/activate', settings, deadline)
             except Exception as error:
                 with self.lock:
                     if version == self.generation:
                         self.stage = 'verified'
                 if getattr(error, 'code', None) == 'SLOT_FULL':
-                    self._refresh_schedule_windows()
+                    self._refresh_schedule_windows(deadline)
                 raise
             with self.lock:
                 self.binding = binding
@@ -311,16 +332,17 @@ class Controller:
                 self.verification_error = None
             if self.proxy:
                 self.proxy.disable_capture()
-            self._refresh_schedule_windows()
+            self._refresh_schedule_windows(deadline)
             return binding
 
     def refresh(self):
         with self.operation:
+            deadline = self._operation_deadline()
             try:
-                health = self.cloud.request('GET', '/health')
-                binding = self._request('GET', '/v1/binding') if self.identity else None
-                runs = self._request('GET', '/v1/binding/runs') if binding else {'items': [], 'nextCursor': None}
-                self._refresh_schedule_windows()
+                health = self._cloud_request('GET', '/health', deadline=deadline)
+                binding = self._request('GET', '/v1/binding', deadline=deadline) if self.identity else None
+                runs = self._request('GET', '/v1/binding/runs', deadline=deadline) if binding else {'items': [], 'nextCursor': None}
+                self._refresh_schedule_windows(deadline)
                 with self.lock:
                     self.connected, self.configured = True, health.get('configured', False)
                     self.binding, self.runs, self.error = binding, runs, None
@@ -333,18 +355,19 @@ class Controller:
 
     def settings(self, body):
         with self.operation:
+            deadline = self._operation_deadline()
             try:
-                binding = self._request('PATCH', '/v1/binding', body)
+                binding = self._request('PATCH', '/v1/binding', body, deadline)
             except ValueError as error:
                 if getattr(error, 'code', None) == 'SLOT_FULL':
-                    self._refresh_schedule_windows()
+                    self._refresh_schedule_windows(deadline)
                 raise
             with self.lock:
                 for key in ('inventory', 'inventoryError', 'avatarUrl'):
                     if self.binding and key in self.binding and key not in binding:
                         binding[key] = self.binding[key]
                 self.binding = binding
-            self._refresh_schedule_windows()
+            self._refresh_schedule_windows(deadline)
             return binding
 
     def test_notification(self):
@@ -357,9 +380,10 @@ class Controller:
 
     def delete(self):
         with self.operation:
+            deadline = self._operation_deadline()
             snapshot, version = self._freeze_capture()
             try:
-                result = self._request('DELETE', '/v1/binding')
+                result = self._request('DELETE', '/v1/binding', deadline=deadline)
             except Exception:
                 self._restore_capture(snapshot, version)
                 raise
@@ -372,7 +396,7 @@ class Controller:
                     self.platform = None
                     self.stage = 'idle'
                     self.verification_error = None
-            self._refresh_schedule_windows()
+            self._refresh_schedule_windows(deadline)
             return result
 
     def history(self, cursor):

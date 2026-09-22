@@ -40,7 +40,7 @@ class CloudClient:
         self.keys = {}
         self.lock = threading.Lock()
 
-    def request(self, method, path, body=None, token=None):
+    def request(self, method, path, body=None, token=None, deadline=None):
         if not path.startswith('/v1/') and path != '/health':
             raise ValueError('无效的云端接口')
         data = json.dumps(body, separators=(',', ':')).encode() if body is not None else None
@@ -56,12 +56,14 @@ class CloudClient:
                 headers['Idempotency-Key'] = self.keys.setdefault(digest, (str(uuid.uuid4()), now))[0]
         request = Request(self.base_url + path, data=data, headers=headers, method=method)
         try:
-            deadline = time.monotonic() + self._timeout_budget(method, path)
+            request_deadline = time.monotonic() + self._timeout_budget(method, path)
+            if deadline is not None:
+                request_deadline = min(request_deadline, deadline)
             last_error = None
             openers = (self.opener,) if self.loopback else (self.opener, self.direct_opener)
             payload = None
             for index, opener in enumerate(openers):
-                remaining = deadline - time.monotonic()
+                remaining = request_deadline - time.monotonic()
                 if remaining <= 0:
                     break
                 try:
@@ -73,7 +75,7 @@ class CloudClient:
                     continue
                 try:
                     with response:
-                        payload = self._read_response(response, deadline)
+                        payload = self._read_response(response, request_deadline)
                     break
                 except (URLError, OSError, TimeoutError) as error:
                     last_error = error

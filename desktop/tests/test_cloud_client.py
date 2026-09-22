@@ -132,6 +132,15 @@ class CloudClientTests(unittest.TestCase):
         self.assertLessEqual(timeout, 120)
         self.assertGreater(timeout, 119)
 
+    def test_caller_deadline_shortens_an_individual_request_budget(self):
+        client = CloudClient('https://cloud.example')
+        client.opener = Mock()
+        client.opener.open.return_value = io.BytesIO(b'{"ok":true,"data":{}}')
+        client.request('GET', '/health', deadline=time.monotonic() + 0.02)
+        timeout = client.opener.open.call_args.kwargs['timeout']
+        self.assertGreater(timeout, 0)
+        self.assertLess(timeout, 0.02)
+
     @patch('desktop.cloud_client.build_opener')
     @patch('desktop.cloud_client.ssl.create_default_context')
     @patch('desktop.cloud_client.certifi.where', return_value='/bundled/cacert.pem')

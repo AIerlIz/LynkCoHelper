@@ -27,6 +27,7 @@ class FakeCloud:
         self.action_started = {}
         self.action_gates = {}
         self.action_errors = {}
+        self.deadlines = []
         self.base_url = 'https://lynkco.ltools.asia'
 
     def wait_for_action(self, path):
@@ -38,7 +39,9 @@ class FakeCloud:
         if error:
             raise error
 
-    def request(self, method, path, body=None, token=None):
+    def request(self, method, path, body=None, token=None, deadline=None):
+        if deadline is not None:
+            self.deadlines.append((path, deadline))
         self.calls.append((method, path, body))
         if path.startswith('/v1/claim/'):
             return dict(userId='owner', managementToken='management-secret', recoveryCode='recovery-secret')
@@ -99,6 +102,47 @@ class BindingTests(unittest.TestCase):
         result = controller.claim('https://lynkco.ltools.asia/claim/claim-token_123456')
         self.assertTrue(result['saved'])
         self.assertIn(('POST', '/v1/claim/claim-token_123456', {}), self.cloud.calls)
+
+    def test_refresh_uses_one_operation_deadline_and_releases_lock_after_timeout(self):
+        from desktop.cloud_client import CloudError
+
+        self.controller.OPERATION_TIMEOUT = 0.01
+        self.cloud.deadlines.clear()
+        original = self.cloud.request
+
+        def request(method, path, body=None, token=None, deadline=None):
+            if path == '/health':
+                self.assertIsNotNone(deadline)
+                self.cloud.deadlines.append((path, deadline))
+                raise CloudError('NETWORK', 'fixture timeout')
+            return original(method, path, body, token, deadline)
+
+        self.cloud.request = request
+        with self.assertRaises(CloudError):
+            self.controller.refresh()
+        self.assertEqual(len(self.cloud.deadlines), 1)
+        self.assertEqual(self.controller.run(), {'items': [], 'nextCursor': None})
+        self.assertIn(('POST', '/v1/binding/runs', {}), self.cloud.calls)
+
+    def test_composite_actions_share_the_same_deadline_for_follow_up_refresh(self):
+        self.controller.OPERATION_TIMEOUT = 5
+
+        def assert_shared_deadline(action, primary_path):
+            self.cloud.deadlines.clear()
+            action()
+            paths = [path for path, _ in self.cloud.deadlines]
+            self.assertIn(primary_path, paths)
+            self.assertIn('/v1/schedule-windows', paths)
+            deadlines = [deadline for path, deadline in self.cloud.deadlines
+                         if path in (primary_path, '/v1/schedule-windows')]
+            self.assertEqual(len(set(deadlines)), 1)
+
+        self.controller.binding = {'id': 'binding'}
+        assert_shared_deadline(lambda: self.controller.settings({'scheduleTime': '08:00-10:00'}), '/v1/binding')
+        self.controller.candidate = {'id': 'candidate', 'expiresAt': 9999999999999}
+        assert_shared_deadline(lambda: self.controller.activate({'scheduleTime': '08:00-10:00'}), '/v1/binding-candidates/candidate/activate')
+        self.controller.binding = {'id': 'binding'}
+        assert_shared_deadline(self.controller.delete, '/v1/binding')
 
     def test_claim_accepts_invitation_code_without_full_link(self):
         controller = __import__('desktop.binding', fromlist=['Controller']).Controller(self.cloud, MemoryStore())
