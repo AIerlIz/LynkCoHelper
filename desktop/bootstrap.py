@@ -534,7 +534,8 @@ def copy_member(bundle, member, destination, ui):
     path = extraction_path(destination, member)
     if member.isdir():
         path.mkdir(exist_ok=True)
-        os.chmod(path, member.mode)
+        if member.mode is not None:
+            os.chmod(path, member.mode)
         return
     if member.issym():
         os.symlink(member.linkname, path)
@@ -548,7 +549,8 @@ def copy_member(bundle, member, destination, ui):
         while chunk := source.read(1024 * 1024):
             check_cancelled(ui)
             output.write(chunk)
-    os.chmod(path, member.mode)
+    if member.mode is not None:
+        os.chmod(path, member.mode)
 
 
 def extract(archive, destination, ui=None):

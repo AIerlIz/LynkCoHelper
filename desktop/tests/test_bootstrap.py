@@ -54,6 +54,26 @@ class BootstrapTests(unittest.TestCase):
         if os.name != 'nt':
             self.assertTrue(path.stat().st_mode & 0o100)
 
+    def test_extract_accepts_filtered_directory_and_hardlink_modes(self):
+        archive = self.root / 'filtered-modes.tar.gz'
+        with tarfile.open(archive, 'w:gz') as bundle:
+            directory = tarfile.TarInfo('client')
+            directory.type = tarfile.DIRTYPE
+            directory.mode = 0o755
+            bundle.addfile(directory)
+            original = tarfile.TarInfo('client/original')
+            original.mode = 0o755
+            original.size = 4
+            bundle.addfile(original, io.BytesIO(b'test'))
+            hardlink = tarfile.TarInfo('client/alias')
+            hardlink.type = tarfile.LNKTYPE
+            hardlink.linkname = 'client/original'
+            bundle.addfile(hardlink)
+
+        extract(archive, self.root / 'out')
+        self.assertEqual((self.root / 'out/client/original').read_bytes(), b'test')
+        self.assertEqual((self.root / 'out/client/alias').read_bytes(), b'test')
+
     def test_wait_for_child_keeps_graphical_progress_responsive(self):
         child = unittest.mock.Mock()
         child.wait.side_effect = [__import__('subprocess').TimeoutExpired('client', .1), 0]
