@@ -118,12 +118,7 @@ dmypy.json
 # 敏感信息：账号密码/登录token/自定义签名密钥，不应提交到仓库
 /LynkCoHelper/env.json
 /LynkCoHelper/geely_env.json
-/LynkCoHelper/.comment_state.json
-/LynkCoHelper/.comment_state.json.lock
-
-# lynkco_partner.py 运行时状态（同 comment_state，含会话数据不入库）
-/LynkCoHelper/.partner_state.json
-/LynkCoHelper/.partner_state.json.lock
+/LynkCoHelper/beta/
 
 # 调试/抓包时保存的接口原始响应，可能含真实 token/手机号等敏感信息
 /LynkCoHelper/res.json

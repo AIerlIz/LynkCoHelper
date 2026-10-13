@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 通知工具模块，提供任务报告格式化和多渠道推送能力（不含业务逻辑，供
-lynkco_daily_tasks.py、lynkco_comment.py 按需调用）：
+lynkco_daily_tasks.py 按需调用）：
     - build_markdown_report(result)：把任务结果字典组装成 Markdown 文案；
     - send_bark_notification(...)：把一段 Markdown 文案推送到 Bark；
     - send_notifications(...)：按配置推送到 Bark、飞书、钉钉、企业微信。
