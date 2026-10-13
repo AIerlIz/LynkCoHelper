@@ -28,6 +28,15 @@ extract_gric_auto.py —— GRIC X-SIGNATURE 密钥全自动提取（CI / 无本
     新版 emulator 37.x 的 QEMU2 直接拒绝 arm64 guest，旧 31.3.10 在
     2026 ubuntu runner 内核上 segfault（run 33374210610 实证）。
 
+CI 实证结论（2026-10-13）：x86_64 路线已闭环（run 38369132429 成功，
+密钥 HAR 复算 100% 命中）。链路要点：App 的加固壳在 libndk 翻译下会
+周期性 SIGSEGV 并由系统自动重启（每轮存活 ~1-2 分钟）；首次启动的进程
+SDK init 不完整，需**跨重启跟踪主进程**（cmdline 精确匹配包名）并对
+每轮存活窗口做高地址优先全堆快照——重启后的进程会完成 SDK init、
+密钥解密进配置对象（deviceModel ±2KB 锚点命中），进程崩溃后用快照
+离线扫描提取。GRIC_HAR_B64 存精简版验证 HAR（仅 x-signature 请求，
+约 6KB；完整 HAR 超 Secret 48KB 上限，需裁剪到仅含签名请求）。
+
 用法（在仓库根目录执行）：
   python3 LynkCoHelper/tools/extract_gric_auto.py                # 全自动
   python3 LynkCoHelper/tools/extract_gric_auto.py --har <capture.har>
