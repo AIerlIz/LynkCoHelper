@@ -6,9 +6,22 @@ extract_gric_key.py —— GRIC X-SIGNATURE 密钥提取与回归验证（脱敏
 实现 GRIC X-SIGNATURE 密钥提取与回归校验流程，
 两个子命令（均不硬编码任何密钥）：
 
-  scan  在线提取：dump 设备 Java 堆 -> 扫 STS 现场 -> 找候选密钥 -> HMAC 自验证
+  scan  在线提取：dump 设备 Java 堆 -> 三级降级找密钥 -> 复算验证（全部内置）
         python3 tools/extract_gric_key.py scan [--serial <SN>] [--pid <PID>]
-                    [--max-mb 1200] [--write] [--mask]
+                    [--max-mb 1200] [--har <capture.har>] [--write] [--mask]
+
+        验证优先级（复算逻辑写死在脚本内，无需外部步骤）：
+          1. STS 现场自验证：密钥候选与签名同现场，HMAC 配对即实锤
+             （需 App 已登录，心跳持续重签产生现场）；
+          2. HAR 离线复算：按算法规格重建 STS 逐候选复算抓包签名
+             （--har 未指定时自动发现仓库内最新 *.har；App 未登录也可用，
+             密钥在 SDK 启动时即解密进配置对象，不依赖 STS 现场）。
+
+        候选来源（按命中成本排序，逐级降级）：
+          a. STS 现场后 4KB 窗口（32 可打印字符）
+          b. 配置对象锚点：deviceModel ±2KB 窗口内的 32-hex
+             （密钥与设备字段并列在同一配置对象，锚点与 App 版本无关）
+          c. 全堆 32-hex 形态扫描（兜底，候选多但复算仍是本地零成本）
 
         --write   验证命中后自动写入 ../geely_env.json 的 gricSecret 字段
         --mask    输出时打码密钥（默认全显，仅本地终端使用）
@@ -37,7 +50,7 @@ extract_gric_key.py —— GRIC X-SIGNATURE 密钥提取与回归验证（脱敏
   * App 已登录并挂前台（心跳 app/hb 持续重签，现场必然存在）
   * adb 在 PATH 或用 --serial 指定设备
 
-原理（详见逆向文档）：
+原理：
   签名计算瞬间，(完整 STS, HMAC 密钥, 签名结果) 同时以明文存在于堆中。
   以 STS 第一行 accept-language: 为锚点提取，锚点后依次为
   签名 raw digest(byte[32]) -> 签名 Base64 -> 密钥(32 可打印字符)。
@@ -63,6 +76,14 @@ B64_RE = re.compile(rb"[A-Za-z0-9+/]{43}=")
 # 密钥候选：32 个可打印字符（经验上为十六进制小写）
 KEY_RE = re.compile(rb"[!-~]{32}")
 SCAN_WINDOW_AFTER_STS = 4096  # STS 结束后向后扫描多远找密钥/签名
+
+# 密钥形态（实测口径）：32 个小写十六进制字符，前后不紧邻 hex 字符/连字符
+HEX32_RE = re.compile(rb"(?<![0-9a-fA-F-])[0-9a-f]{32}(?![0-9a-fA-F-])")
+# 配置对象锚点：密钥与 deviceModel/osVersion 等设备字段并列在同一配置对象里
+# （锚点是模拟器镜像属性，与 App 版本无关，不受混淆更新影响）
+CFG_ANCHORS = (b"sdk_gphone64_arm64", b"sdk_gphone64_x86_64", b"Android 13 (API 33)")
+CFG_ANCHOR_WINDOW = 2048       # 锚点 ±2KB 窗口
+HAR_ACCEPT_RATE = 0.9          # HAR 复算通过率阈值（≥90% 即采用）
 
 # 车辆头提取：STS/header 现场中的 "x-vehicle-identifier:<value>" 行。
 # 密文形态 = 32 字节 AES 密文的 Base64（43 字符 + '='）；
@@ -133,7 +154,7 @@ def dump_region(serial, pid, start, end):
     """流式拉取一段内存（exec-out 避免 shell tty 污染二进制）。"""
     size = end - start
     skip, cnt = start // 4096, size // 4096
-    data = adb("exec-out", "su", "-c",
+    data = adb("exec-out",
                f"dd if=/proc/{pid}/mem bs=4096 skip={skip} count={cnt}",
                serial=serial, binary=True, timeout=1800)
     return data[:cnt * 4096]
@@ -185,61 +206,197 @@ def try_verify(sts, sig_b64, key):
     return base64.b64encode(digest) == sig_b64
 
 
+def collect_cfg_anchor_candidates(blobs):
+    """配置对象锚点扫描：锚点 ±2KB 窗口内的 32-hex 候选（带出现次数）。
+
+    实测密钥在堆中与 deviceModel/deviceBrand/osVersion 并列在同一配置对象，
+    以设备字段为锚可把全堆候选压缩约 50 倍（200 -> 个位数）。
+    """
+    counter = {}
+    for blob in blobs:
+        for anchor in CFG_ANCHORS:
+            pos = 0
+            while True:
+                off = blob.find(anchor, pos)
+                if off < 0:
+                    break
+                pos = off + 1
+                lo = max(0, off - CFG_ANCHOR_WINDOW)
+                hi = min(len(blob), off + CFG_ANCHOR_WINDOW)
+                for m in HEX32_RE.finditer(blob, lo, hi):
+                    counter[m.group(0)] = counter.get(m.group(0), 0) + 1
+    return counter
+
+
+def collect_hex_candidates(blobs):
+    """全堆形态扫描（兜底）：全部唯一 32-hex 值。"""
+    seen = set()
+    for blob in blobs:
+        for m in HEX32_RE.finditer(blob):
+            seen.add(m.group(0))
+    return seen
+
+
+def discover_har(explicit):
+    """定位离线复算用的 HAR：--har 指定 > 仓库内最新 *.har 自动发现。"""
+    if explicit:
+        if not os.path.exists(explicit):
+            print(f"[错误] HAR 文件不存在: {explicit}")
+            sys.exit(1)
+        return explicit
+    # 仓库两层根目录（LynkCoHelper/ 与 LynkCoHelper-master/）找最新的 .har
+    roots = (os.path.dirname(HERE), os.path.dirname(os.path.dirname(HERE)))
+    best = None
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        for name in os.listdir(root):
+            if name.lower().endswith(".har"):
+                p = os.path.join(root, name)
+                if best is None or os.path.getmtime(p) > os.path.getmtime(best):
+                    best = p
+    return best
+
+
+def verify_candidates_with_har(candidates, har_path):
+    """逐候选对 HAR 全部签名请求复算（STS 重建 + HMAC 内置，零线上请求）。
+
+    返回 [(key, ok, total)] 按 ok 降序；采用阈值见 HAR_ACCEPT_RATE。
+    """
+    with open(har_path, "r", encoding="utf-8") as f:
+        har = json.load(f)
+    signed = []
+    for entry in har.get("log", {}).get("entries", []):
+        built = build_sts_from_har(entry)
+        if built:
+            signed.append(built)
+    if not signed:
+        print(f"[错误] {har_path} 中没有带 x-signature 的请求，无法离线复算")
+        sys.exit(2)
+    results = []
+    for cand in candidates:
+        key = cand.decode()
+        ok = 0
+        for sts, expect, _, _ in signed:
+            digest = hmac.new(key.encode(), sts.encode(), hashlib.sha256).digest()
+            if base64.b64encode(digest).decode() == expect:
+                ok += 1
+        results.append((cand, ok, len(signed)))
+    results.sort(key=lambda r: -r[1])
+    return results
+
+
+def _report_and_write(key, note, args):
+    shown = key.decode() if not args.mask else \
+        f"{key[:6].decode()}******{key[-4:].decode()}"
+    print(f"\n[★] 密钥命中：{shown}")
+    print(f"    验证方式：{note}")
+    if args.write:
+        write_env_secret(key.decode())
+
+
 def cmd_scan(args):
     pid = args.pid or get_pid(args.serial)
-    print(f"[*] PID = {pid}（{PKG}），App 需保持前台（心跳持续重签）")
+    print(f"[*] PID = {pid}（{PKG}），App 保持前台")
     regions = find_heap_regions(args.serial, pid, args.max_mb)
 
-    sts_hits, pairs = [], []
+    sts_hits, blobs = [], []
     for start, end, name in regions:
         print(f"[*] dump {start:#x}-{end:#x} ...")
         try:
             blob = dump_region(args.serial, pid, start, end)
         except subprocess.TimeoutExpired:
-            print(f"[警告] 该区域 dump 超时，跳过")
+            print("[警告] 该区域 dump 超时，跳过")
             continue
         if not blob:
-            print(f"[警告] 该区域读取为空（可能已被回收/反保护），跳过")
+            print("[警告] 该区域读取为空（可能已被回收/反保护），跳过")
             continue
+        blobs.append(blob)
         for sts, off in extract_sts_candidates(blob):
             sts_hits.append((sts, start + off, blob, off + len(sts)))
         print(f"    {len(blob) / 1048576:.0f} MB，累计 STS 现场 {len(sts_hits)} 处")
 
-    if not sts_hits:
-        print("[错误] 未找到任何完整 STS 现场。排查：1) App 是否在前台且已登录；"
-              "2) 心跳接口是否在跑（等 30s 后重试）；3) 堆区域是否被 --max-mb 截掉")
-        sys.exit(2)
-
-    # 第一轮：现场内自验证（STS 后窗口内的 b64 签名 × 32 字符候选）
-    verified = set()
-    for sts, addr, blob, end in sts_hits:
-        sigs, keys = find_candidates_after(blob, end)
-        for sig in sigs:
-            for key in keys:
-                if try_verify(sts, sig, key):
-                    verified.add(key)
-    # 第二轮：跨现场交叉验证（同一候选能对上多个现场的签名，防巧合）
-    if verified:
-        cross = {}
-        for key in verified:
-            cross[key] = 0
+    # ---- 验证优先级 1：STS 现场自验证（密钥与签名同现场，HMAC 配对即实锤） ----
+    if sts_hits:
+        verified = set()
         for sts, addr, blob, end in sts_hits:
             sigs, keys = find_candidates_after(blob, end)
             for sig in sigs:
-                for key in verified:
+                for key in keys:
                     if try_verify(sts, sig, key):
-                        cross[key] += 1
-        best = max(cross.items(), key=lambda kv: kv[1])
-        print(f"\n[★] 密钥命中（跨 {best[1]}/{len(sts_hits)} 个签名现场验证通过）：")
-        shown = f"{best[0].decode()} (验证 {best[1]} 处)" if not args.mask else \
-            f"{best[0][:6].decode()}******{best[0][-4:].decode()} (验证 {best[1]} 处)"
-        print(f"    {shown}")
-        if args.write:
-            write_env_secret(best[0].decode())
-        return
-    print(f"\n[未命中] {len(sts_hits)} 个 STS 现场均未验证成功。")
-    print("可能原因：密钥形态不是 32 可打印字符（v2.2+ 算法升级？），或密钥不在 STS 后 4KB 窗口。")
-    print("可人工检查：打印任一 STS 现场后 4KB 内容，观察 byte[32] 对象分布。")
+                        verified.add(key)
+        if verified:
+            # 跨现场交叉验证（同一候选能对上多个现场的签名，防巧合）
+            cross = {key: 0 for key in verified}
+            for sts, addr, blob, end in sts_hits:
+                sigs, keys = find_candidates_after(blob, end)
+                for sig in sigs:
+                    for key in verified:
+                        if try_verify(sts, sig, key):
+                            cross[key] += 1
+            best = max(cross.items(), key=lambda kv: kv[1])
+            _report_and_write(best[0],
+                              f"STS 现场配对（跨 {best[1]}/{len(sts_hits)} 个签名现场）",
+                              args)
+            return
+        print(f"[*] {len(sts_hits)} 个 STS 现场自验证未命中，转入候选复算 ...")
+    else:
+        print("[*] 无 STS 现场（App 未登录也可提取：密钥在 SDK 启动时已解密进配置对象）")
+
+    # ---- 验证优先级 2：候选密钥 × HAR 离线复算（STS 重建 + HMAC 内置） ----
+    # 候选来源按成本升序逐级降级，任一级复算达标即采用
+    sts_window_keys = set()
+    for sts, addr, blob, end in sts_hits:
+        _, keys = find_candidates_after(blob, end)
+        sts_window_keys.update(keys)
+    tier_sources = [
+        ("STS 现场后 4KB 窗口", {k: 1 for k in sts_window_keys}),
+        ("配置对象锚点（deviceModel ±2KB 窗口）", collect_cfg_anchor_candidates(blobs)),
+        ("全堆 32-hex 形态扫描", {k: 1 for k in collect_hex_candidates(blobs)}),
+    ]
+    # 候选清单落盘（无 HAR/未命中时仍产出，供本地 har 子命令事后复算）
+    if args.candidates:
+        payload = {
+            "stsHits": len(sts_hits),
+            "tiers": [
+                {"name": name,
+                 "count": len(counter),
+                 "candidates": {k.decode(): c for k, c in counter.items()}}
+                for name, counter in tier_sources
+            ],
+        }
+        with open(args.candidates, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        print(f"[*] 候选清单已写入 {args.candidates}")
+
+    har_path = discover_har(args.har)
+    if not har_path:
+        print("[错误] 现场自验证未命中且未找到 HAR。两种解法：")
+        print("  1) 加 --har <capture.har>（任一次抓包，含 x-signature 请求即可）离线复算候选；")
+        print("  2) App 登录后挂前台 30s（心跳重签产生 STS 现场）再重跑。")
+        sys.exit(3)
+    print(f"[*] 离线复算 HAR：{har_path}")
+
+    for tier_name, counter in tier_sources:
+        if not counter:
+            continue
+        cands = list(counter)
+        print(f"[*] 候选来源「{tier_name}」：{len(cands)} 个，逐候选复算 ...")
+        results = verify_candidates_with_har(cands, har_path)
+        key, ok, total = results[0]
+        if ok >= total * HAR_ACCEPT_RATE:
+            _report_and_write(key, f"HAR 离线复算 {ok}/{total}"
+                                   f"（{ok * 100 // total}%，{har_path}）", args)
+            return
+        for k, o, t in results[:3]:
+            shown = k.decode() if not args.mask else \
+                f"{k[:6].decode()}******{k[-4:].decode()}"
+            print(f"    最佳候选 {shown}: {o}/{t}")
+
+    print(f"\n[未命中] 全部候选复算未达 {int(HAR_ACCEPT_RATE * 100)}%。可能原因：")
+    print("  1) HAR 是密钥轮换前的旧抓包（新密钥验不过旧签名）——用当前版本 App 重新抓一份；")
+    print("  2) 密钥形态不再是 32-hex（v2.2+ 算法升级）——人工检查 STS 现场/配置对象邻域；")
+    print("  3) 堆 dump 不含密钥（SDK 未初始化）——确认 App 进程已跑完启动流程。")
     sys.exit(3)
 
 
@@ -425,6 +582,10 @@ def main():
     p_scan.add_argument("--serial", default=None, help="adb 设备序列号（默认取唯一设备）")
     p_scan.add_argument("--pid", type=int, default=None, help="目标进程 PID（默认 pidof 自动获取）")
     p_scan.add_argument("--max-mb", type=int, default=1200, help="最多 dump 多少 MB 堆")
+    p_scan.add_argument("--har", default=None,
+                        help="离线复算用的 HAR 文件（默认自动发现仓库内最新 *.har）")
+    p_scan.add_argument("--candidates", default=None, metavar="JSON",
+                        help="把各层级候选密钥写入 JSON 文件（CI 产物/本地事后复算用）")
     p_scan.add_argument("--write", action="store_true", help="命中后写入 geely_env.json")
     p_scan.add_argument("--mask", action="store_true", help="输出打码密钥")
     p_scan.set_defaults(func=cmd_scan)

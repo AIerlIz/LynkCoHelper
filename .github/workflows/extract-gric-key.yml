@@ -1,0 +1,128 @@
+name: extract-gric-key
+
+# 手动触发。GRIC X-SIGNATURE 密钥轮换后的重提入口（原理：
+#   冷启动模拟器（默认 arm64-v8a 镜像 + TCG 全系统模拟，App 跑真 ARM64
+#   指令，冷启动 20~50 分钟）-> 官方 CDN 装最新 APK -> 正常启动 App
+#   -> 自动点隐私协议 -> 等 SDK 初始化（无需登录）-> dump 堆 ->
+#   三级候选（STS 现场/配置对象锚点/全堆形态）-> HAR 离线复算 ->
+#   写 geely_env.json -> 一次性链接送达。
+#
+# 验证 HAR 经 Secret 传入（HAR 含 JWT/VIN，不能入库，*.har 已 gitignore）：
+#   仓库 Settings -> Secrets and variables -> Actions -> 新建 GRIC_HAR_B64，
+#   值 = 任一次抓包 HAR 的 base64（含 x-signature 请求即可，用密钥轮换
+#   "之后" 的新抓包）：
+#     macOS:  base64 -i capture.har | pbcopy
+#     Linux:  base64 -w0 capture.har
+#   未配置时 workflow 仍可跑，但只产出未验证候选清单（artifact 下载后
+#   本地用 tools/extract_gric_key.py har 复算确认）。
+#
+# x86_64 镜像选项（inputs.image_abi）：KVM 加速冷启动约 45 秒，但 App 的
+# arm64 库经 libndk 翻译执行，SDK 能否完整初始化未实证——默认不选，
+# 失败换回 arm64-v8a 重跑。
+on:
+  workflow_dispatch:
+    inputs:
+      image_abi:
+        description: "模拟器镜像 ABI（x86_64 为实验路线）"
+        type: choice
+        default: arm64-v8a
+        options:
+          - arm64-v8a
+          - x86_64
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180   # arm64 TCG 冷启动 20~50 分钟 + App 启动 + 堆 dump
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 开放 KVM 权限（x86_64 镜像加速用；arm64 TCG 路线无影响）
+        run: |
+          if [ -e /dev/kvm ]; then
+            echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+            sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm || sudo chmod 666 /dev/kvm
+            ls -l /dev/kvm
+          else
+            echo "::warning::runner 无 /dev/kvm（arm64 TCG 路线不需要，继续）"
+          fi
+
+      - name: 提取 GRIC 密钥（模拟器 + 堆取证，无 JDWP/无反调试对抗）
+        env:
+          EMU_HEADLESS: "1"      # 无头模式
+          LYNKCO_IMAGE_ABI: ${{ inputs.image_abi }}
+          GRIC_HAR_B64: ${{ secrets.GRIC_HAR_B64 }}
+        run: python3 LynkCoHelper/tools/extract_gric_auto.py
+
+      # 未配置 GRIC_HAR_B64 / 扫描未命中时，候选清单是唯一产出：
+      # 下载后本地跑 tools/extract_gric_key.py har <capture.har> --secret <候选>
+      - name: 上传候选密钥清单（未验证时用于本地复算）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gric-candidates
+          path: gric_candidates.json
+          if-no-files-found: ignore
+
+      # 模拟器排障三件套（同 extract-appsecret.yml）
+      - name: 失败诊断（磁盘/内存/内核日志）
+        if: failure()
+        run: |
+          echo "=== df -h ==="; df -h || true
+          echo "=== free -h ==="; free -h || true
+          echo "=== dmesg 末尾（看 OOM killer）==="; sudo dmesg 2>/dev/null | tail -40 || true
+
+      - name: 上传模拟器完整日志（失败诊断）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: emulator-log
+          path: /home/runner/.lynkco-helper-tools/emulator.log
+          if-no-files-found: ignore
+
+      - name: 生成一次性取件链接（阅后即焚：仅可打开 1 次，10 分钟后失效）
+        if: success()
+        run: |
+          python3 - <<'EOF'
+          import json, time, urllib.parse, urllib.request
+
+          with open("LynkCoHelper/geely_env.json", encoding="utf-8") as f:
+              secret = json.load(f).get("gricSecret", "")
+          if not secret:
+              print("[!] geely_env.json 中未找到 gricSecret，跳过一次性链接生成")
+              raise SystemExit(0)
+
+          # api.cloudcpp.com（API Center 阅后即焚，国内直连友好）：
+          # ttl=600 秒兜底过期，链接被打开 1 次后内容即焚毁。
+          # 需 Accept: application/json（缺失则返回 HTML 表单页）；带重试。
+          data = urllib.parse.urlencode({
+              "content": f"gricSecret: {secret}",
+              "ttl": "600",
+          }).encode()
+          r = None
+          for attempt in range(3):
+              req = urllib.request.Request(
+                  "https://api.cloudcpp.com/burn", data=data, method="POST",
+                  headers={"User-Agent": "LynkCoHelper-extract/1.0",
+                           "Accept": "application/json"})
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as resp:
+                      r = json.load(resp)
+                  break
+              except Exception as e:
+                  print(f"[!] 第 {attempt + 1} 次请求失败: {e}")
+                  if attempt < 2:
+                      time.sleep(5)
+          if not r or not r.get("link"):
+              print("[!] 一次性链接生成失败，geely_env.json 已随 runner 销毁，"
+                    "请重跑 workflow 或改用本地提取")
+              raise SystemExit(1)
+          print("[+] 一次性取件链接（仅可打开 1 次，10 分钟后失效）：")
+          print(f"    {r['link']}")
+          print("[+] 拿到密钥后更新 GitHub Secret LYNKCO_APP_SECRETS（若"
+                " daily-tasks 需要）或本地 geely_env.json 的 gricSecret 字段。")
+          EOF

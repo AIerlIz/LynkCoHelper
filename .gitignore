@@ -121,8 +121,19 @@ dmypy.json
 /LynkCoHelper/.comment_state.json
 /LynkCoHelper/.comment_state.json.lock
 
+# lynkco_partner.py 运行时状态（同 comment_state，含会话数据不入库）
+/LynkCoHelper/.partner_state.json
+/LynkCoHelper/.partner_state.json.lock
+
 # 调试/抓包时保存的接口原始响应，可能含真实 token/手机号等敏感信息
 /LynkCoHelper/res.json
+
+# 抓包 HAR 文件（含 JWT/VIN 等敏感请求头，不入库；
+# CI 验证用 GitHub Secret GRIC_HAR_B64 传入，勿提交文件）
+*.har
+
+# GRIC 密钥提取的候选清单产物（tools/extract_gric_auto.py）
+/gric_candidates.json
 
 # lynkco_login.py 运行时生成的极验滑块辅助页面（临时文件，含 captchaId 等
 # 会话相关参数，无需保留）
