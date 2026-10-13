@@ -18,11 +18,15 @@ extract_gric_auto.py —— GRIC X-SIGNATURE 密钥全自动提取（CI / 无本
            Linux `base64 -w0 capture.har`；
   2. 命令行 --har <capture.har>（本地使用）。
 
-镜像 ABI（环境变量 LYNKCO_IMAGE_ABI，默认 arm64-v8a）：
-  - arm64-v8a：Linux TCG 全系统模拟，App 跑真 ARM64 指令，全程稳定
-    （实测稳定路线）；冷启动 20~50 分钟，CI timeout 需 180 分钟；
-  - x86_64：KVM 加速冷启动约 45 秒，但 App 的 arm64 库经 libndk 翻译
-    执行，SDK 能否完整初始化未实证——失败时换回默认重跑。
+镜像 ABI（环境变量 LYNKCO_IMAGE_ABI，默认 x86_64）：
+  - x86_64：KVM 加速冷启动约 45 秒；镜像优先取仓库 Release 托管的
+    sysimg-x86_64-33-r09（x86_64-33-r09-local.zip，保留 arm64 libndk
+    翻译；官方 r10+ 已移除），emulator 钉 31.3.10；App 的 arm64 库经
+    libndk 翻译执行。
+  - arm64-v8a：Linux TCG 全系统模拟，App 跑真 ARM64 指令，冷启动
+    20~50 分钟，CI timeout 需 180 分钟。注意：当前 CI 环境不可用——
+    新版 emulator 37.x 的 QEMU2 直接拒绝 arm64 guest，旧 31.3.10 在
+    2026 ubuntu runner 内核上 segfault（run 33374210610 实证）。
 
 用法（在仓库根目录执行）：
   python3 LynkCoHelper/tools/extract_gric_auto.py                # 全自动
