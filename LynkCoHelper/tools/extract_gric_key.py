@@ -112,11 +112,24 @@ def adb(*args, serial=None, binary=False, timeout=600):
 
 # ---------------------------------------------------------------- scan ----
 
+def _cmdline(serial, pid):
+    try:
+        return adb("shell", "cat", f"/proc/{pid}/cmdline", serial=serial)
+    except Exception:
+        return ""
+
+
 def get_pid(serial):
     pids = adb("shell", "pidof", PKG, serial=serial).strip().split()
     if not pids:
         print(f"[错误] 未找到进程 {PKG}，请确认 App 已在前台运行")
         sys.exit(1)
+    # 多进程 App（壳守护/沙盒子进程）：主进程 cmdline 恰为包名，
+    # 子进程形如 pkg:web —— SDK 配置对象在主进程，优先返回主进程
+    for pid in pids:
+        cmd = _cmdline(serial, pid)
+        if PKG in cmd and ":" not in cmd:
+            return pid
     return pids[0]
 
 

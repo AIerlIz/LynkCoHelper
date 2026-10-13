@@ -86,7 +86,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: emulator-log
-          path: /home/runner/.lynkco-helper-tools/emulator.log
+          path: |
+            /home/runner/.lynkco-helper-tools/emulator.log
+            /tmp/gric_logcat.txt
           if-no-files-found: ignore
 
       - name: 生成一次性取件链接（阅后即焚：仅可打开 1 次，10 分钟后失效）

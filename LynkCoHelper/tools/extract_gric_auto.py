@@ -111,6 +111,34 @@ def ensure_root():
     core.adb("wait-for-device")
 
 
+def app_main_pid():
+    """返回 App 主进程 PID（cmdline 恰为包名；子进程形如 pkg:web）。
+    主进程不存在但子进程存活时返回 None（壳守护进程骗不过 pidof 检查）。"""
+    out = core.adb("shell", "pidof", core.APP).strip()
+    if not out:
+        return None
+    pids = out.split()
+    for pid in pids:
+        try:
+            cmd = core.adb("shell", "cat", f"/proc/{pid}/cmdline").strip("\r\n\x00")
+        except Exception:
+            continue
+        if core.APP in cmd and ":" not in cmd:
+            return pid
+    return None
+
+
+def dump_proc_table():
+    """打印 App 全部进程（诊断多进程/重启行为）。"""
+    try:
+        out = core.adb("shell", "ps", "-A").strip()
+        for line in out.splitlines():
+            if "lynkco" in line:
+                print(f"    [proc] {line.strip()}")
+    except Exception as e:
+        print(f"    [!] ps 采集失败：{e}")
+
+
 def snapshot_heap(pid, snap_dir, seq, block_mb=32):
     """dump 目标进程 dalvik 主堆到分块文件，高地址块优先。
 
@@ -180,12 +208,14 @@ def launch_app_and_wait():
     t0 = time.time()
 
     # 2. 紧凑循环点隐私协议/引导页（SDK init 被它阻塞；uiautomator dump
-    #    在翻译执行下单次 ~6s，循环到点中或进程消失/超时）
+    #    在翻译执行下单次 ~6s，循环到点中或主进程消失/超时）
     print("[*] 尝试点掉隐私协议/引导页（SDK 初始化的前置）...")
     consented = False
     while time.time() - t0 < wait_sec:
-        if not core.adb("shell", "pidof", core.APP).strip():
-            print(f"[警告] App 进程已消失（未点中同意即崩溃），已抓 {len(snaps)} 个快照")
+        pid = app_main_pid()
+        if pid is None:
+            print("[警告] App 主进程已消失（未点中同意即崩溃）")
+            dump_proc_table()
             return False, snaps
         if tap_consent():
             consented = True
@@ -193,16 +223,23 @@ def launch_app_and_wait():
     if not consented and time.time() - t0 >= wait_sec:
         print("[警告] 始终未点中隐私协议按钮（弹窗未出现？），仍尝试快照")
 
-    # 3. 高地址优先分块快照：每轮覆盖全堆（高分块优先落盘），
-    #    周期性补点引导页后续页；进程消失即停，返回已有快照
-    print("[*] SDK 初始化中，高地址优先抓堆快照（App 崩溃前抢 partial）...")
+    # 3. 高地址优先分块快照：目标始终是当前主进程（崩溃重启后自动跟随），
+    #    周期性补点引导页后续页；主进程消失即停
+    print("[*] SDK 初始化中，高地址优先抓主进程堆快照（崩溃前抢 partial）...")
+    dump_proc_table()
     seq = 0
+    seen_pid = app_main_pid()
     next_tap = time.time() + 20
     while time.time() - t0 < wait_sec + 60:
-        if not core.adb("shell", "pidof", core.APP).strip():
-            print(f"[警告] App 进程已消失（x86_64/libndk 崩溃常见），"
+        pid = app_main_pid()
+        if pid is None:
+            print(f"[警告] App 主进程已消失（x86_64/libndk 崩溃常见），"
                   f"改用已抓到的 {len(snaps)} 个堆快照块离线扫描")
+            dump_proc_table()
             return False, snaps
+        if pid != seen_pid:
+            print(f"[*] 主进程 PID 变化 {seen_pid} -> {pid}（崩溃后重启），跟随新进程")
+            seen_pid = pid
         if time.time() > next_tap:
             next_tap += 20
             tap_consent()
@@ -270,6 +307,15 @@ def main():
     auto.ensure_apk()
     ensure_root()
     alive, snaps = launch_app_and_wait()
+
+    # 诊断：SDK init/崩溃行为看 logcat（artifact 由 workflow 一并上传）
+    try:
+        logcat = core.adb("shell", "logcat", "-d", "-t", "8000")
+        with open("/tmp/gric_logcat.txt", "w", encoding="utf-8", errors="replace") as f:
+            f.write(logcat)
+        print("[*] logcat 已存 /tmp/gric_logcat.txt")
+    except Exception as e:
+        print(f"[!] logcat 采集失败：{e}")
 
     har_path = resolve_har(args.har)
     if not har_path:
