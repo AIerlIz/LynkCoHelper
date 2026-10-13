@@ -14,7 +14,7 @@ Windows 侧前置（脚本自动处理，无需手动装）：
     110MB）解压到 ~/.lynkco-helper-tools-win/，之后离线复用；
   - adb.exe：默认取 PATH 里的，找不到时按本文件 ADB_FALLBACK 找。
 
-三个坑与 WSL 版同源，处理方式已内置（详见 docs/本地一键提取指南.md）：
+三个坑与 WSL 版同源，处理方式已内置：
   1. IPv6 坑：jdb -attach 一律显式 127.0.0.1:端口；
   2. forward 生命周期坑：每轮重试换新端口；
   3. 探测握手坑：jdb attach 成功后走完全程，绝不提前 kill。
@@ -226,8 +226,7 @@ def main():
             except Exception:
                 pass
 
-    sys.exit(f"[!] {core.MAX_ATTEMPTS} 次尝试全部失败，"
-             "请参照 docs/本地一键提取指南.md 排障")
+    sys.exit(f"[!] {core.MAX_ATTEMPTS} 次尝试全部失败，请结合文件头的坑位说明排障")
 
 
 # ---------------------------------------------------------------- helpers

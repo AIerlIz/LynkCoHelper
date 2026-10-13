@@ -85,7 +85,7 @@ def run_and_notify() -> dict:
     -> 推送到 Bark（lynkco_notify 模块）。
 
     每日任务固定包含"签到+分享"两项（分享接口每日有加分次数上限，重复
-    调用不会重复加分，详见 docs/分享任务接口说明.md）。
+    调用不会重复加分）。
 
     返回值同 run_daily_tasks()，并额外附带 "notify_result" 字段（Bark
     推送接口的响应，或 {"skipped": True}）。

@@ -268,7 +268,7 @@ def main():
         core.cold_start_and_wait(emu, args.avd)
         return main()
     sys.exit(f"[!] {core.MAX_ATTEMPTS} 次尝试全部失败；若反复失败请参考文件头"
-             "的坑位说明与 docs/本地一键提取指南.md 的排障章节")
+             "的坑位说明排查")
 
 
 if __name__ == "__main__":

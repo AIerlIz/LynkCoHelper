@@ -3,13 +3,13 @@
 extract_appsecret.py —— macOS 版：一键自动提取领克 App 的 nativeAppKey /
 nativeAppSecret（平台共享核心见 appsecret_core.py）。
 
-原理（详见 docs/AppSecret_逆向分析记录.md 4.5 节）：
+原理：
   App 进入 waitForDebugger 阻塞态后，adbd 的 jdwp 转发握手会永久挂死；
   只有在进程 fork 后约 0.5s 的早期窗口内完成 JDWP 握手才能成功，而 jdb
   （JVM）冷启动需 1-3s 赶不上。故由本地 TCP 代理抢先完成握手，再把字节流
   双向转发给 jdb 下断点提取。
 
-用法（在仓库根目录执行，详见文档第 7 节；脚本已置可执行位，两种调用等价）：
+用法（在仓库根目录执行；脚本已置可执行位，两种调用等价）：
   ./LynkCoHelper/tools/extract_appsecret.py             # 无设备时自动冷启动 AVD
   python3 LynkCoHelper/tools/extract_appsecret.py <AVD名字>  # 指定要冷启动的 AVD
 

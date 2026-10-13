@@ -18,7 +18,7 @@
 | `lynkco_daily_tasks.py` | 顶层入口：编排签到 + 分享 + 积分查询并推送结果 |
 | `lynkco_comment.py` | 独立的图文动态评论任务；默认 dry-run，不属于签到/分享任务 |
 
-原理、签名算法、接口协议等技术细节见 `docs/` 目录，此处只介绍如何使用。
+此处只介绍如何使用；逆向分析等技术笔记未随仓库分发。
 
 ## AppSecret 自动提取
 
@@ -44,8 +44,6 @@
 
 - 所有日志输出均脱敏（密钥值仅显示前 3 后 2 位），明文只写入本地 `env.json`（gitignore）；CI 提取时通过一次性链接送达明文（仅可打开 1 次，10 分钟失效）
 - CI 使用的 x86_64 模拟器镜像与 APK 均托管在仓库 Release（`sysimg-x86_64-33-r09` / `apk-latest`），版本经实测钉死，不随上游变动漂移
-
-详细排障（镜像版本坑、IPv6 坑、forward 生命周期坑等）见 `docs/本地一键提取指南.md`。
 
 ## 快速开始
 
@@ -81,7 +79,7 @@ pip install -r requirements.txt
 ```
 
 - `user`：账号相关凭据（token 至少需要一个，见下）。
-- `secrets`：领克 App 的应用级签名密钥（非个人凭证，但代码中不内置，必须自行配置），获取方式见 `docs/AppSecret_逆向分析记录.md`。每个字段都支持用同名大写环境变量覆盖（如 `LYNKCO_NATIVE_APP_KEY`）；也可用一个整合环境变量 `LYNKCO_APP_SECRETS`（值为与 `secrets` 结构相同的 JSON 字符串）一次性提供全部 4 个字段，适合 CI 只想配置一个 Secret 的场景（优先级：单独字段环境变量 > `LYNKCO_APP_SECRETS` > `env.json`）。均未配置时程序会直接报错退出。
+- `secrets`：领克 App 的应用级签名密钥（非个人凭证，但代码中不内置，必须自行配置），获取方式：运行 `tools/extract_appsecret_*.py` 自动提取，或抓包分析。每个字段都支持用同名大写环境变量覆盖（如 `LYNKCO_NATIVE_APP_KEY`）；也可用一个整合环境变量 `LYNKCO_APP_SECRETS`（值为与 `secrets` 结构相同的 JSON 字符串）一次性提供全部 4 个字段，适合 CI 只想配置一个 Secret 的场景（优先级：单独字段环境变量 > `LYNKCO_APP_SECRETS` > `env.json`）。均未配置时程序会直接报错退出。
 - `notify`：推送相关配置，`barkKey` 为 Bark 推送 Key（可选，也可用环境变量 `LYNKCO_BARK_KEY` 覆盖）。
 
 ### 3. 获取 token
@@ -91,7 +89,7 @@ pip install -r requirements.txt
 - **token**（约 30 分钟有效）：写入 `user.token`，或设置环境变量 `LYNKCO_TOKEN`。
 - **refreshToken + deviceId**（约 30 天有效，推荐）：写入 `user.refreshToken` / `user.deviceId`，或设置环境变量 `LYNKCO_REFRESH_TOKEN` / `LYNKCO_DEVICE_ID`。配置后脚本每次运行会自动续期 token 并回写 `env.json`，无需频繁手动登录。
 
-获取方式：抓包登录一次领克 App，或运行 `python3 lynkco_login.py <手机号>` 交互式完成滑块 + 短信登录（会自动写入 `env.json`）。详见 `docs/登录接口协议说明.md`。
+获取方式：抓包登录一次领克 App，或运行 `python3 lynkco_login.py <手机号>` 交互式完成滑块 + 短信登录（会自动写入 `env.json`）。
 
 ### 4. 执行
 
@@ -100,7 +98,7 @@ python3 lynkco_helper.py         # 签到 + 分享
 python3 lynkco_daily_tasks.py    # 签到 + 分享 + 积分查询 + Bark 推送
 ```
 
-分享任务（`lynkco_share.py`）每日有加分次数上限，接口返回成功不代表真正加分，重复调用不会重复加分，详见 `docs/分享任务接口说明.md`。
+分享任务（`lynkco_share.py`）每日有加分次数上限，接口返回成功不代表真正加分，重复调用不会重复加分。
 
 可选环境变量：
 
@@ -179,10 +177,3 @@ python3 lynkco_comment.py --publish --max-comments 1 # 真实发布，最多尝�
 - 登录环节（滑块验证码、可能的短信验证）无法完全自动化。
 - 已确认的 iPhone 使用场景可在安装并完全信任代理证书后抓包；桌面助手按此流程设计。不同 App/系统版本仍需真机验收，不能仅因系统是 iOS 就判定无法抓包。
 - `token`/`refreshToken`/`secrets` 均为敏感信息，请勿提交到公开仓库（`env.json` 已在 `.gitignore` 中忽略），应通过 GitHub Secrets 或本地 `env.json` 传递。
-
-## 更多文档
-
-- `docs/本地一键提取指南.md`：AppSecret 自动提取的完整流程、各平台坑位与排障速查。
-- `docs/AppSecret_逆向分析记录.md`：签名密钥的逆向分析过程与获取方式。
-- `docs/登录接口协议说明.md`：登录/续期相关接口协议细节。
-- `docs/分享任务接口说明.md`：分享任务接口协议与限制说明。

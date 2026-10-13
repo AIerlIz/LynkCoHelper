@@ -8,9 +8,6 @@
     2. 账号密码/短信验证码全流程登录：get_security_config -> 用户完成极验
        滑块 -> validate_geetest -> send_login_sms -> login_by_mobile_code。
 
-接口协议细节（请求路径、body 结构、签名要求等）见
-docs/登录接口协议说明.md；签名密钥来源见 docs/AppSecret_逆向分析记录.md。
-
 统一入口 load_token()：按优先级自动选择上述方式，供 lynkco_sign.py /
 lynkco_share.py 等业务脚本直接调用。
 """
@@ -169,7 +166,7 @@ def _save_refreshed_token(refreshed: dict) -> None:
     save_env_fields(fields)
 
 
-# ------------------------- 账号密码/短信验证码全流程登录，完整链路见 docs/登录接口协议说明.md -------------------------
+# ------------------------- 账号密码/短信验证码全流程登录 -------------------------
 
 EP_SECURITY_CONFIG = "/auth/v1/security/config"
 EP_GEETEST_VALIDATE = "/auth/v1/security/geeTestV4/validate"

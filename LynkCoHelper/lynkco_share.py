@@ -3,8 +3,7 @@
 领克App 分享任务脚本。
 
 分享流程使用 App 原生签名体系；分享落地页仍需携带 H5 Origin/Referer，但这不
-代表使用 H5 签名。接口协议细节、已知限制见
-docs/分享任务接口说明.md。重要提醒：接口返回 success 不代表真正加分（每日
+代表使用 H5 签名。重要提醒：接口返回 success 不代表真正加分（每日
 有次数上限，重复调用不会重复加分），需自行对比 myEnergy 的 point 字段判断。
 
 do_share() 已封装好"优先简化两步法，失败/无 content_id 时可选回退完整三步法"的
@@ -29,7 +28,7 @@ from lynkco_common import (
 )
 from lynkco_login import load_token
 
-# ------------------------- 分享任务相关端点，完整协议见 docs/分享任务接口说明.md -------------------------
+# ------------------------- 分享任务相关端点 -------------------------
 EP_GET_SHARE_CODE = "/app/v1/task/getShareCode"          # 获取本次分享的一次性 shareCode（原生签名）
 EP_SHARE_LOOKUP = "/app/v1/task/shareCodeToUserId"        # 通过 shareCode 反查分享人 userId
 EP_SHARE_CHECK = "/app/v1/task/shareContentContectCheck"  # 分享前置校验，可选步骤

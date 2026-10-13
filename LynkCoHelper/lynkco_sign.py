@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-领克App 每日签到脚本。签名算法详见 lynkco_common.py / docs/AppSecret_逆向分析记录.md。
+领克App 每日签到脚本。签名算法详见 lynkco_common.py。
 
 使用前提：需要有效 token，由 lynkco_login.py 的 load_token() 统一提供
 （自动续期或人工获取），本脚本无需关心 token 具体来源。
@@ -155,7 +155,7 @@ def main():
         print(f"[警告] 查询连续签到信息失败: {e}")
 
     # 分享任务已独立到 lynkco_share.py，每次运行本脚本都会执行一次（接口
-    # 每日有加分次数上限，重复调用不会重复加分，详见 docs/分享任务接口说明.md）。
+    # 每日有加分次数上限，重复调用不会重复加分）。
     from lynkco_share import run_auto_share
     run_auto_share(token)
 

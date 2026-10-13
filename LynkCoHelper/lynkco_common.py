@@ -16,7 +16,8 @@ env.json 结构（四个子对象）：
 
 密钥读取优先级：单独环境变量 > 整合环境变量 LYNKCO_APP_SECRETS（JSON 字符串，
 结构同 env.json["secrets"]） > env.json["secrets"] 对应字段，均未配置时报错。
-签名算法与密钥来源详见 docs/AppSecret_逆向分析记录.md。
+签名算法与密钥来源：阿里云 API 网关标准 HMAC-SHA256 签名，密钥经
+运行时逆向提取后配置。
 """
 import base64
 import hashlib
