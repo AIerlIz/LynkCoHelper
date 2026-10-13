@@ -41,7 +41,8 @@ def load_ai_config() -> dict:
     return {"provider": provider, "api_key": api_key, "model": model}
 
 
-def generate_comment(post: dict, api_key: str, model: str = None, session=None) -> str:
+def generate_comment(post: dict, api_key: str, model: str = None, session=None,
+                     system_prompt=None) -> str:
     """Generate a comment using the selected provider's implementation."""
     config = load_ai_config()
     provider = config["provider"]
@@ -49,10 +50,12 @@ def generate_comment(post: dict, api_key: str, model: str = None, session=None) 
     if provider == "glm":
         return _generate_glm_comment(
             post, api_key, model=selected_model, session=session,
+            system_prompt=system_prompt,
         )
     if provider == "chatanywhere":
         return _generate_chatanywhere_comment(
             post, api_key, model=selected_model, session=session,
+            system_prompt=system_prompt,
         )
     raise CommentGenerationError("模型供应商无效")
 

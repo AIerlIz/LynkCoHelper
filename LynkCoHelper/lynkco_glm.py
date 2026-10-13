@@ -8,11 +8,13 @@ from lynkco_ai_images import prepare_glm_images
 API_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 
 
-def generate_comment(post: dict, api_key: str, model: str = "glm-4v-flash", session=None) -> str:
+def generate_comment(post: dict, api_key: str, model: str = "glm-4v-flash", session=None,
+                     system_prompt=None) -> str:
     """Generate a comment through GLM."""
     return _generate_comment(post, api_key, endpoint=API_URL, model=model, session=session,
                              headers={"Content-Type": "application/json"},
-                             prepare_images=prepare_glm_images)
+                             prepare_images=prepare_glm_images,
+                             system_prompt=system_prompt)
 
 
 __all__ = ["API_URL", "CommentGenerationError", "generate_comment"]

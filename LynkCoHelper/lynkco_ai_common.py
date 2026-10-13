@@ -58,8 +58,13 @@ def _response_text(response, api_key: str) -> str:
 
 
 def generate_comment(post: dict, api_key: str, *, endpoint: str, model: str,
-                     session=None, headers=None, prepare_images=None) -> str:
-    """Call an OpenAI-compatible endpoint once and validate its comment."""
+                     session=None, headers=None, prepare_images=None,
+                     system_prompt=None) -> str:
+    """Call an OpenAI-compatible endpoint once and validate its comment.
+
+    system_prompt allows callers to override the default article-comment
+    prompt for other use cases.
+    """
     if not isinstance(api_key, str) or not api_key.strip():
         raise CommentGenerationError("缺少模型 API Key")
     if not isinstance(model, str) or not model.strip():
@@ -99,10 +104,11 @@ def generate_comment(post: dict, api_key: str, *, endpoint: str, model: str,
     prepared_images = prepare_images(images[:3]) if prepare_images else images[:3]
     parts = [{"type": "text", "text": f"标题：{title[:200]}\n正文：{content[:3000]}"}]
     parts.extend({"type": "image_url", "image_url": {"url": url}} for url in prepared_images)
+    prompt = system_prompt if isinstance(system_prompt, str) and system_prompt.strip() else SYSTEM_PROMPT
     payload = {
         "model": model,
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": prompt},
             {"role": "user", "content": parts},
         ],
         "max_tokens": 160,
