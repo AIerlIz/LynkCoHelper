@@ -111,34 +111,52 @@ def ensure_root():
     core.adb("wait-for-device")
 
 
-def snapshot_heap(pid, dest):
-    """dump 目标进程 dalvik 主堆到文件（等待期间的抢快，App 崩溃后仍有离线样本）。
-    返回快照字节数；失败返回 0。只扫 dalvik-main space（密钥所在），控制耗时。"""
+def snapshot_heap(pid, snap_dir, seq, block_mb=32):
+    """dump 目标进程 dalvik 主堆到分块文件，高地址块优先。
+
+    壳在 SDK init 后不久即 SIGSEGV（libndk 翻译），存活窗口只有几秒；
+    新分配的对象（解密后的密钥/配置对象）偏向堆高地址端，因此从堆尾
+    向堆头分块 dump：进程崩溃前的 partial 快照最可能覆盖到密钥。
+    返回本轮写入的文件路径列表（可能为空）。"""
     try:
         regions = gk.find_heap_regions(None, pid, 400)
     except SystemExit:
-        return 0
-    total = 0
-    with open(dest, "wb") as f:
-        for start, end, _name in regions:
+        return []
+    files = []
+    bs = block_mb * 1048576
+    for start, end, _name in regions:
+        # 从高到低切块：[(max(start, end-bs), end), ..., (start, start+bs)]
+        blocks = []
+        hi = end
+        while hi > start:
+            lo = max(start, hi - bs)
+            blocks.append((lo, hi))
+            hi = lo
+        for lo, hi in blocks:
+            path = os.path.join(snap_dir, f"heap_{seq:03d}_{lo:x}.bin")
             try:
-                blob = gk.dump_region(None, pid, start, end)
+                blob = gk.dump_region(None, pid, lo, hi)
             except Exception:
-                break   # 进程可能刚崩溃，partial 快照仍有价值
+                break   # 进程崩溃：已落盘的分块仍有价值
             if not blob:
                 continue
-            f.write(blob)
-            total += len(blob)
-    return total
+            with open(path, "wb") as f:
+                f.write(blob)
+            files.append(path)
+    return files
 
 
 def launch_app_and_wait():
-    """正常启动 App（无需调试器），等待 SDK 初始化，期间持续抓堆快照。
+    """正常启动 App（无需调试器），先点掉隐私协议，再高地址优先抓堆快照。
 
     x86_64/libndk 路线下点掉隐私协议后，加固壳的 arm64 代码在翻译执行中
-    SIGSEGV（run 38362294876 实证），进程会在密钥解密后不久崩溃。因此
-    等待循环每轮先抓一次堆快照：进程活着时供离线分析，崩溃后也能用
-    最后的快照离线扫出已解密的密钥。返回 (alive, [快照路径])。"""
+    SIGSEGV（run 38363894876 实证），进程会在密钥解密后不久崩溃。时序上
+    两步走：
+      1. 紧凑循环点「同意」——SDK init 被隐私协议阻塞，点不中则密钥
+         永远不解密（run 38363820950 实证：没点中，堆里无密钥）；
+      2. 点中后立即高地址优先分块快照——新分配的配置对象（含密钥）
+         偏向堆尾，崩溃前的 partial 快照最可能覆盖。
+    返回 (alive, [快照路径])。"""
     print(f"[*] 启动 App: {core.ACTIVITY}")
     core.adb("shell", "am", "start", "-n", core.ACTIVITY)
 
@@ -156,34 +174,49 @@ def launch_app_and_wait():
         return False, []
     print(f"[*] App 进程 PID = {pid}")
 
-    # 2. 等待 SDK 初始化：每轮先抓堆快照再梯度点掉隐私协议/引导页；
-    #    进程消失即停（崩溃前的最后快照里可能已有解密后的密钥）
     wait_sec = _wait_sec()
-    print(f"[*] 等待 SDK 初始化（密钥此时解密进配置对象），共 {wait_sec}s，")
-    print("    每轮先抓堆快照（App 若崩溃，用最后快照离线扫）...")
     snap_dir = tempfile.mkdtemp(prefix="gric_snap_")
     snaps = []
     t0 = time.time()
-    next_tap = 5
-    seq = 0
+
+    # 2. 紧凑循环点隐私协议/引导页（SDK init 被它阻塞；uiautomator dump
+    #    在翻译执行下单次 ~6s，循环到点中或进程消失/超时）
+    print("[*] 尝试点掉隐私协议/引导页（SDK 初始化的前置）...")
+    consented = False
     while time.time() - t0 < wait_sec:
-        elapsed = time.time() - t0
-        if elapsed > next_tap:
-            next_tap += 20
-            tap_consent()
+        if not core.adb("shell", "pidof", core.APP).strip():
+            print(f"[警告] App 进程已消失（未点中同意即崩溃），已抓 {len(snaps)} 个快照")
+            return False, snaps
+        if tap_consent():
+            consented = True
+            break
+    if not consented and time.time() - t0 >= wait_sec:
+        print("[警告] 始终未点中隐私协议按钮（弹窗未出现？），仍尝试快照")
+
+    # 3. 高地址优先分块快照：每轮覆盖全堆（高分块优先落盘），
+    #    周期性补点引导页后续页；进程消失即停，返回已有快照
+    print("[*] SDK 初始化中，高地址优先抓堆快照（App 崩溃前抢 partial）...")
+    seq = 0
+    next_tap = time.time() + 20
+    while time.time() - t0 < wait_sec + 60:
         if not core.adb("shell", "pidof", core.APP).strip():
             print(f"[警告] App 进程已消失（x86_64/libndk 崩溃常见），"
-                  f"改用已抓到的 {len(snaps)} 个堆快照离线扫描")
+                  f"改用已抓到的 {len(snaps)} 个堆快照块离线扫描")
             return False, snaps
-        snap = os.path.join(snap_dir, f"heap_{seq:03d}.bin")
-        seq += 1
-        size = snapshot_heap(pid, snap)
-        if size:
-            snaps.append(snap)
-            print(f"    ... 已等待 {int(elapsed)}s，快照 #{seq - 1}：{size // 1048576} MB")
+        if time.time() > next_tap:
+            next_tap += 20
+            tap_consent()
+        files = snapshot_heap(pid, snap_dir, seq)
+        if files:
+            snaps.extend(files)
+            seq += 1
+            print(f"    ... 已等待 {int(time.time() - t0)}s，第 {seq} 轮新增 "
+                  f"{len(files)} 块")
         else:
-            print(f"    ... 已等待 {int(elapsed)}s（本轮快照失败，进程可能在崩溃中）")
-        time.sleep(5)
+            # 全块落空：可能是未 committed 页/进程正在崩溃，交给下一轮
+            # pidof 检查兑底，不在此处退出
+            print(f"    ... 已等待 {int(time.time() - t0)}s（本轮无块落盘）")
+        time.sleep(2)
     return True, snaps
 
 
