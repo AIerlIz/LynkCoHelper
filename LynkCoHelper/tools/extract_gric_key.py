@@ -296,25 +296,40 @@ def _report_and_write(key, note, args):
 
 
 def cmd_scan(args):
-    pid = args.pid or get_pid(args.serial)
-    print(f"[*] PID = {pid}（{PKG}），App 保持前台")
-    regions = find_heap_regions(args.serial, pid, args.max_mb)
+    blobs = []
+    if getattr(args, "heap_file", None):
+        # 离线模式：分析已 dump 的堆快照文件（App 崩溃后仍可扫，
+        # 快照由 extract_gric_auto.py 在等待期间持续抓取）
+        for path in args.heap_file:
+            with open(path, "rb") as f:
+                blob = f.read()
+            blobs.append(blob)
+            print(f"[*] 堆快照 {path}: {len(blob) / 1048576:.0f} MB")
+        sts_hits = []
+        for blob in blobs:
+            for sts, off in extract_sts_candidates(blob):
+                sts_hits.append((sts, off, blob, off + len(sts)))
+        print(f"[*] 离线模式：{len(blobs)} 个快照，累计 STS 现场 {len(sts_hits)} 处")
+    else:
+        pid = args.pid or get_pid(args.serial)
+        print(f"[*] PID = {pid}（{PKG}），App 保持前台")
+        regions = find_heap_regions(args.serial, pid, args.max_mb)
 
-    sts_hits, blobs = [], []
-    for start, end, name in regions:
-        print(f"[*] dump {start:#x}-{end:#x} ...")
-        try:
-            blob = dump_region(args.serial, pid, start, end)
-        except subprocess.TimeoutExpired:
-            print("[警告] 该区域 dump 超时，跳过")
-            continue
-        if not blob:
-            print("[警告] 该区域读取为空（可能已被回收/反保护），跳过")
-            continue
-        blobs.append(blob)
-        for sts, off in extract_sts_candidates(blob):
-            sts_hits.append((sts, start + off, blob, off + len(sts)))
-        print(f"    {len(blob) / 1048576:.0f} MB，累计 STS 现场 {len(sts_hits)} 处")
+        sts_hits = []
+        for start, end, name in regions:
+            print(f"[*] dump {start:#x}-{end:#x} ...")
+            try:
+                blob = dump_region(args.serial, pid, start, end)
+            except subprocess.TimeoutExpired:
+                print("[警告] 该区域 dump 超时，跳过")
+                continue
+            if not blob:
+                print("[警告] 该区域读取为空（可能已被回收/反保护），跳过")
+                continue
+            blobs.append(blob)
+            for sts, off in extract_sts_candidates(blob):
+                sts_hits.append((sts, start + off, blob, off + len(sts)))
+            print(f"    {len(blob) / 1048576:.0f} MB，累计 STS 现场 {len(sts_hits)} 处")
 
     # ---- 验证优先级 1：STS 现场自验证（密钥与签名同现场，HMAC 配对即实锤） ----
     if sts_hits:
@@ -582,6 +597,9 @@ def main():
     p_scan.add_argument("--serial", default=None, help="adb 设备序列号（默认取唯一设备）")
     p_scan.add_argument("--pid", type=int, default=None, help="目标进程 PID（默认 pidof 自动获取）")
     p_scan.add_argument("--max-mb", type=int, default=1200, help="最多 dump 多少 MB 堆")
+    p_scan.add_argument("--heap-file", action="append", default=None, metavar="FILE",
+                        help="离线模式：分析已有的堆快照文件（可重复，跳过活进程 dump；"
+                             "App 崩溃后用快照扫）")
     p_scan.add_argument("--har", default=None,
                         help="离线复算用的 HAR 文件（默认自动发现仓库内最新 *.har）")
     p_scan.add_argument("--candidates", default=None, metavar="JSON",

@@ -55,6 +55,7 @@ sys.path.insert(0, HERE)
 
 import appsecret_core as core                    # noqa: E402
 import extract_appsecret_github_action as auto   # noqa: E402
+import extract_gric_key as gk                    # noqa: E402
 
 # 隐私协议/引导页可点击文案（前缀匹配；"不同意"不会误命中：正则要求
 # 引号后紧跟文案首字）。首次启动 SDK 初始化通常被隐私协议阻塞，必须点掉。
@@ -110,8 +111,34 @@ def ensure_root():
     core.adb("wait-for-device")
 
 
+def snapshot_heap(pid, dest):
+    """dump 目标进程 dalvik 主堆到文件（等待期间的抢快，App 崩溃后仍有离线样本）。
+    返回快照字节数；失败返回 0。只扫 dalvik-main space（密钥所在），控制耗时。"""
+    try:
+        regions = gk.find_heap_regions(None, pid, 400)
+    except SystemExit:
+        return 0
+    total = 0
+    with open(dest, "wb") as f:
+        for start, end, _name in regions:
+            try:
+                blob = gk.dump_region(None, pid, start, end)
+            except Exception:
+                break   # 进程可能刚崩溃，partial 快照仍有价值
+            if not blob:
+                continue
+            f.write(blob)
+            total += len(blob)
+    return total
+
+
 def launch_app_and_wait():
-    """正常启动 App（无需调试器）并等 SDK 初始化。"""
+    """正常启动 App（无需调试器），等待 SDK 初始化，期间持续抓堆快照。
+
+    x86_64/libndk 路线下点掉隐私协议后，加固壳的 arm64 代码在翻译执行中
+    SIGSEGV（run 38362294876 实证），进程会在密钥解密后不久崩溃。因此
+    等待循环每轮先抓一次堆快照：进程活着时供离线分析，崩溃后也能用
+    最后的快照离线扫出已解密的密钥。返回 (alive, [快照路径])。"""
     print(f"[*] 启动 App: {core.ACTIVITY}")
     core.adb("shell", "am", "start", "-n", core.ACTIVITY)
 
@@ -126,26 +153,38 @@ def launch_app_and_wait():
         time.sleep(5)
     if not pid:
         print("[警告] 未等到 App 进程（启动失败或被反调试拦截？），仍继续尝试扫描")
-    else:
-        print(f"[*] App 进程 PID = {pid}")
+        return False, []
+    print(f"[*] App 进程 PID = {pid}")
 
-    # 2. 等待 SDK 初始化：期间梯度点掉隐私协议/引导页，并确认进程存活
+    # 2. 等待 SDK 初始化：每轮先抓堆快照再梯度点掉隐私协议/引导页；
+    #    进程消失即停（崩溃前的最后快照里可能已有解密后的密钥）
     wait_sec = _wait_sec()
-    print(f"[*] 等待 SDK 初始化（密钥此时解密进配置对象），共 {wait_sec}s ...")
+    print(f"[*] 等待 SDK 初始化（密钥此时解密进配置对象），共 {wait_sec}s，")
+    print("    每轮先抓堆快照（App 若崩溃，用最后快照离线扫）...")
+    snap_dir = tempfile.mkdtemp(prefix="gric_snap_")
+    snaps = []
     t0 = time.time()
     next_tap = 5
+    seq = 0
     while time.time() - t0 < wait_sec:
         elapsed = time.time() - t0
         if elapsed > next_tap:
             next_tap += 20
             tap_consent()
         if not core.adb("shell", "pidof", core.APP).strip():
-            print("[警告] App 进程已消失（可能崩溃，x86_64/libndk 路线常见），"
-                  "仍继续尝试扫描")
-            break
-        if int(elapsed) % 30 == 0 and int(elapsed) > 0:
-            print(f"    ... 已等待 {int(elapsed)}s")
+            print(f"[警告] App 进程已消失（x86_64/libndk 崩溃常见），"
+                  f"改用已抓到的 {len(snaps)} 个堆快照离线扫描")
+            return False, snaps
+        snap = os.path.join(snap_dir, f"heap_{seq:03d}.bin")
+        seq += 1
+        size = snapshot_heap(pid, snap)
+        if size:
+            snaps.append(snap)
+            print(f"    ... 已等待 {int(elapsed)}s，快照 #{seq - 1}：{size // 1048576} MB")
+        else:
+            print(f"    ... 已等待 {int(elapsed)}s（本轮快照失败，进程可能在崩溃中）")
         time.sleep(5)
+    return True, snaps
 
 
 def resolve_har(cli_path):
@@ -169,9 +208,11 @@ def resolve_har(cli_path):
     return path
 
 
-def run_scan(har_path):
+def run_scan(har_path, heap_files=None):
     cmd = [sys.executable, os.path.join(HERE, "extract_gric_key.py"),
            "scan", "--write", "--candidates", CANDIDATES_FILE]
+    for hf in (heap_files or []):
+        cmd += ["--heap-file", hf]
     if har_path:
         cmd += ["--har", har_path]
     print("[*] " + " ".join(cmd))
@@ -195,7 +236,7 @@ def main():
     auto.ensure_device(args.avd)
     auto.ensure_apk()
     ensure_root()
-    launch_app_and_wait()
+    alive, snaps = launch_app_and_wait()
 
     har_path = resolve_har(args.har)
     if not har_path:
@@ -203,7 +244,19 @@ def main():
         print(f"    {CANDIDATES_FILE}，但无法复算验证——请下载候选清单后用")
         print("    tools/extract_gric_key.py har <capture.har> --secret <候选> 本地复算。")
 
+    # 进程已崩溃：只能用快照离线扫（不再重试活进程）
+    if not alive:
+        if not snaps:
+            sys.exit("[!] App 崩溃且无任何堆快照，提取失败")
+        rc = run_scan(har_path, heap_files=snaps)
+        if rc == 0 and os.path.exists(os.path.join(HERE, "..", "geely_env.json")):
+            print("[+] 提取完成（离线快照），密钥已写入 LynkCoHelper/geely_env.json（gitignore）")
+        sys.exit(rc)
+
     rc = run_scan(har_path)
+    if rc != 0 and snaps:
+        print("[*] 活进程扫描未命中，追加已抓快照离线重试 ...")
+        rc = run_scan(har_path, heap_files=snaps)
     if rc != 0:
         print("[*] 首次扫描未命中，追加 120s 等待后重试一次（SDK 可能仍在初始化）...")
         time.sleep(120)
